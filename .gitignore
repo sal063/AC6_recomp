@@ -1,0 +1,17 @@
+# Build output
+out/
+
+# Generated recomp code
+generated/
+
+# Game assets (user-supplied)
+assets/
+
+# VS local settings
+.vs/
+
+# Copilot and debugging workflow 
+.github/instructions/
+
+# CMake user presets (machine-local)
+CMakeUserPresets.json

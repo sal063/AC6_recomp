@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "AC6Recomp (RelWithDebInfo)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "C:\\Users\\Zalamander\\AC6Recomp\\out\\build\\win-amd64-relwithdebinfo\\ac6recomp.exe",
+            "args": [
+                "C:\\Users\\Zalamander\\AC6Recomp\\assets",
+                "--enable_console=false",
+                "--log_level=info"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        }
+    ]
+}

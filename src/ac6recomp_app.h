@@ -7,6 +7,9 @@
 
 #include <rex/cvar.h>
 #include <rex/rex_app.h>
+#include <rex/ui/overlay/debug_overlay.h>
+
+#include "render_hooks.h"
 
 REXCVAR_DECLARE(bool, vfetch_index_rounding_bias);
 
@@ -26,8 +29,14 @@ class Ac6recompApp : public rex::ReXApp {
     REXCVAR_SET(vfetch_index_rounding_bias, true);
   }
 
+  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    debug_overlay()->SetStatsProvider([] {
+      auto gs = ac6::GetFrameStats();
+      return rex::ui::FrameStats{gs.frame_time_ms, gs.fps, gs.frame_count};
+    });
+  }
+
   // void OnPostSetup() override {}
-  // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
   // void OnShutdown() override {}
   // void OnConfigurePaths(rex::PathConfig& paths) override {}
 };

@@ -21,6 +21,14 @@ memcpy = 0x82382F18
 memmove = 0x82383870
 memset = 0x823830F0
 XMemCpy = 0x82382A90
+strncmp = 0x82383930
+strncpy = 0x82382370
+strchr = 0x82382190
+strstr = 0x82382520
+strrchr = 0x8238E810
+strcpy_s = 0x823821D0
+memcpy_s = 0x82381DE0
+memmove_s = 0x823809F0
 
 [functions]
 0x82090000 = { name = "rex_sub_82090000" }
@@ -10544,3 +10552,26 @@ XMemCpy = 0x82382A90
 0x823E1250 = { name = "rex_sub_823E1250" }
 0x823E1320 = { name = "rex_sub_823E1320" }
 0x823E13F0 = { name = "rex_sub_823E13F0" }
+
+# ---------------------------------------------------------------------------
+# Midasm hooks — 60fps unlock (Phase 1)
+# ---------------------------------------------------------------------------
+
+# Skip `ori r3,r3,2` that sets vsync swap interval to 2 (30fps lock).
+# When hook returns true, jumps past the ori to 0x821F075C.
+[[midasm_hook]]
+address = 0x821F0758
+name = "ac6VsyncIntervalHook"
+jump_address_on_true = 0x821F075C
+
+# Override the FPS divisor in the delta time formula.
+# r29 holds the divisor (default 60); hook sets it to 30 when unlocked.
+[[midasm_hook]]
+address = 0x821EFD38
+name = "ac6DeltaDivisorHook"
+registers = ["r29"]
+
+# Record frame timestamps before VdSwap for timing overlay.
+[[midasm_hook]]
+address = 0x821F0664
+name = "ac6PresentTimingHook"

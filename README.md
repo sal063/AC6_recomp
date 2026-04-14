@@ -1,23 +1,35 @@
 # AC6Recomp
 
 > [!CAUTION]
-> This project is a work in progress, so a stable experience isn't guaranteed yet. It progresses in-game, but with likely bugs and crashes and more testing is needed.
+> This project is still work in progress. It can boot and run in-game, but bugs, crashes, and missing functionality should be expected.
 
 Recompiled using the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk).
 
+## Repository policy
+
+This repository is intended to contain source code only.
+
+Do not commit or redistribute:
+
+- retail game data
+- `default.xex`
+- disc images, packages, title updates, or firmware files
+- console keys or any other proprietary Microsoft / publisher material
+
+Users must supply their own legally obtained game files locally. This repository does not include those files
 ## Prerequisites
 
 - [CMake](https://cmake.org/) 3.25+
 - [Ninja](https://ninja-build.org/)
 - [Clang](https://releases.llvm.org/) (LLVM/Clang toolchain)
-- A legally obtained copy of the game.
+- A legally obtained copy of the game, prepared by the end user outside this repository
 
-## Building
+## Clone
 
 Clone the repository with submodules:
 
 ```bash
-git clone --recursive https://github.com/rapidsamphire/AC6Recomp.git
+git clone --recursive <your-repo-url>
 cd AC6Recomp
 ```
 
@@ -27,35 +39,45 @@ If you already cloned without `--recursive`:
 git submodule update --init --recursive
 ```
 
-### Assets
+## Local file layout
 
-You need the game's original Xbox 360 disc image (ISO). Tools to extract it can be found [here](https://consolemods.org/wiki/Xbox:ISO_Extraction_%26_Repacking).
+Place your personally obtained game files in `assets/` so they are available only on your machine and remain untracked by Git.
 
-After extraction, drop both the game assets and `default.xex` into the `assets/` directory.
+Expected minimum layout:
 
-### Generate recompiled code
+```text
+assets/
+  default.xex
+  ...
+```
+
+The codegen config expects `assets/default.xex`.
+
+## Build
+
+Generate recompiled code:
 
 ```bash
 cmake --preset win-amd64-relwithdebinfo
 cmake --build --preset win-amd64-relwithdebinfo --target ac6recomp_codegen
 ```
 
-### Build
+Build the project:
 
 ```bash
 cmake --build --preset win-amd64-relwithdebinfo
 ```
 
-(Relwithdebinfo is the recommended build preset as of now.)
+`RelWithDebInfo` is the recommended preset at the moment.
 
-The executable will be in `out/build/win-amd64-relwithdebinfo/`.
+The executable will be produced in `out/build/win-amd64-relwithdebinfo/`.
 
-### Running
+## Run
 
 ```bash
 ./out/build/win-amd64-relwithdebinfo/ac6recomp assets
 ```
 
-### Linux
+## Linux
 
 Replace `win-amd64-relwithdebinfo` with `linux-amd64-relwithdebinfo` in the commands above.

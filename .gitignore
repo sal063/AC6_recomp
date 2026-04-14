@@ -7,9 +7,16 @@ generated/
 
 # Game assets (user-supplied)
 assets/
+*.xex
+*.iso
+*.god
+*.zar
+*.pkg
+*.bin
 
 # VS local settings
 .vs/
+.vscode/
 
 # Copilot and debugging workflow 
 .github/instructions/
@@ -19,3 +26,16 @@ CMakeUserPresets.json
 
 # Local git worktrees
 .worktrees/
+
+# Local notes, backups, and scratch work
+.claude/
+backup/
+OLD_XENON_BUILD/
+rexglue_sdk_new/
+autoresearch/
+*.bak
+*.tmp
+tmp_*.py
+build_*.txt
+*.log
+New Text Document.txt

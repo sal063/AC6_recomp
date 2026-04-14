@@ -14,6 +14,8 @@ include(generated/rexglue.cmake)
 # Sources
 set(AC6RECOMP_SOURCES
     src/main.cpp
+    src/ac6_native_graphics.cpp
+    src/ac6_native_graphics_overlay.cpp
     src/render_hooks.cpp
     src/d3d_hooks.cpp
 )
@@ -25,4 +27,3 @@ else()
 endif()
 
 rexglue_setup_target(ac6recomp)
-

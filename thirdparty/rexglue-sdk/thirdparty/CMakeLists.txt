@@ -320,6 +320,22 @@ endif()
 
 set(FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/FFmpeg")
 
+# Add sources only if they exist (some source-only mirrors may ship without
+# optional arch-optimized files).
+function(rexglue_optional_target_sources target_name)
+  set(existing_sources "")
+  foreach(src IN LISTS ARGN)
+    if(EXISTS "${src}")
+      list(APPEND existing_sources "${src}")
+    else()
+      message(STATUS "ReXGlue: skipping missing optional source: ${src}")
+    endif()
+  endforeach()
+  if(existing_sources)
+    target_sources(${target_name} PRIVATE ${existing_sources})
+  endif()
+endfunction()
+
 # Overlay generated FFmpeg list files
 set(FFMPEG_OVERLAY_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg-overlay")
 set(FFMPEG_OVERLAY_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-overlay")
@@ -440,7 +456,7 @@ add_library(libavutil STATIC
 
 # Add x86 optimizations
 if(IS_X86_64)
-    target_sources(libavutil PRIVATE
+    rexglue_optional_target_sources(libavutil
         ${FFMPEG_DIR}/libavutil/x86/cpu.c
         ${FFMPEG_DIR}/libavutil/x86/fixed_dsp_init.c
         ${FFMPEG_DIR}/libavutil/x86/float_dsp_init.c
@@ -560,7 +576,7 @@ endif()
 
 # Add x86 optimizations 
 if(IS_X86_64)
-    target_sources(libavcodec PRIVATE
+    rexglue_optional_target_sources(libavcodec
         ${FFMPEG_DIR}/libavcodec/x86/constants.c
         ${FFMPEG_DIR}/libavcodec/x86/fdctdsp_init.c
         ${FFMPEG_DIR}/libavcodec/x86/fft_init.c

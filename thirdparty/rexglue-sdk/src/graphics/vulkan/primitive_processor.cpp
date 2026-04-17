@@ -21,7 +21,7 @@
 #include <rex/logging.h>
 #include <rex/ui/vulkan/util.h>
 
-REXCVAR_DEFINE_BOOL(vulkan_force_expand_point_sprites_in_vs, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_force_expand_point_sprites_in_vs, true, "GPU/Vulkan",
                     "Force Vulkan point sprite expansion in the vertex shader, even when geometry "
                     "shaders are available")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

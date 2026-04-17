@@ -15,12 +15,20 @@
 #include <utility>
 
 #include <rex/assert.h>
+#include <rex/cvar.h>
 #include <rex/graphics/d3d12/command_processor.h>
 #include <rex/graphics/d3d12/deferred_command_list.h>
 #include <rex/graphics/d3d12/primitive_processor.h>
 #include <rex/logging.h>
 #include <rex/ui/d3d12/d3d12_provider.h>
 #include <rex/ui/d3d12/d3d12_util.h>
+
+REXCVAR_DEFINE_BOOL(
+    d3d12_expand_point_sprites_in_vs, true, "GPU/D3D12",
+    "Expand Xbox point lists as triangle strips in the vertex shader instead of the host "
+    "point-list + geometry-shader path. Fixes missing trails/particles on some titles and "
+    "drivers where native point expansion is culled or rasterized incorrectly.")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex::graphics::d3d12 {
 
@@ -29,7 +37,8 @@ D3D12PrimitiveProcessor::~D3D12PrimitiveProcessor() {
 }
 
 bool D3D12PrimitiveProcessor::Initialize() {
-  if (!InitializeCommon(true, false, false, true, true, true)) {
+  const bool point_sprites_native_without_vs = !REXCVAR_GET(d3d12_expand_point_sprites_in_vs);
+  if (!InitializeCommon(true, false, false, true, point_sprites_native_without_vs, true)) {
     Shutdown();
     return false;
   }

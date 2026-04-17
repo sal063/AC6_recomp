@@ -26,9 +26,6 @@
 
 REXCVAR_DEFINE_BOOL(draw_resolution_scaled_texture_offsets, true, "GPU/Shader",
                     "Scale texture offsets with draw resolution");
-REXCVAR_DEFINE_BOOL(vfetch_index_rounding_bias, false, "GPU/Shader",
-                    "Apply small epsilon bias to vertex fetch indices before "
-                    "flooring to fix black triangles caused by RCP precision");
 
 namespace rex::graphics {
 using namespace ucode;

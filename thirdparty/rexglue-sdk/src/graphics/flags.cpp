@@ -28,6 +28,9 @@ REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
 REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, true, "GPU",
                     "Use approximate compare for alpha test values to prevent "
                     "flickering on NVIDIA graphics cards");
+REXCVAR_DEFINE_BOOL(vfetch_index_rounding_bias, false, "GPU/Shader",
+                    "Apply small epsilon bias to vertex fetch indices before "
+                    "flooring to fix black triangles caused by RCP precision");
 REXCVAR_DEFINE_BOOL(gpu_debug_markers, false, "GPU",
                     "Insert debug markers into GPU command streams for tools "
                     "like PIX and RenderDoc. Automatically enabled when "

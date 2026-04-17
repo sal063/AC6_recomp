@@ -327,7 +327,7 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
     // instead of leaving the kernel call with a dead mapping forever.
     REXSYS_WARN("XObject::GetNativeObject stale mapping native_ptr={:08X} handle={:08X} "
                 "header_type={} requested_type={}",
-                reinterpret_cast<uint32_t>(native_ptr), handle, uint32_t(header->type), as_type);
+                reinterpret_cast<uintptr_t>(native_ptr), handle, uint32_t(header->type), as_type);
     header->wait_list_flink = 0;
     header->wait_list_blink = 0;
   } else {

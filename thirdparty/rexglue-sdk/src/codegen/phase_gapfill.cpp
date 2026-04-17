@@ -140,25 +140,30 @@ void gapFillCodeRegions(CodegenContext& ctx) {
     auto segments = splitRegionOnTerminators(region, binary, knownCallables);
 
     for (const auto& segment : segments) {
-      // Skip if this segment's start is already a registered function entry
-      if (graph.isEntryPoint(segment.start))
-        continue;
+      uint32_t currentStart = segment.start;
+      
+      while (currentStart < segment.end) {
+        // Skip past the portion of this segment that is inside another function
+        if (auto* containingFunc = graph.getFunctionContaining(currentStart)) {
+          uint32_t funcEnd = containingFunc->base() + containingFunc->size();
+          currentStart = std::max(currentStart + 4, funcEnd);
+          currentStart = (currentStart + 3) & ~3;
+          continue;
+        }
 
-      // Skip if this segment's start is inside another function
-      if (auto* containingFunc = graph.getFunctionContaining(segment.start)) {
-        continue;
+        // Skip if this looks like exception handler data (handler ptr + rdata ptr)
+        if (looksLikeExceptionData(binary, graph, currentStart)) {
+          break;
+        }
+
+        uint32_t segmentSize = segment.end - currentStart;
+        graph.addFunction(currentStart, segmentSize, FunctionAuthority::GAP_FILL, false);
+
+        REXCODEGEN_TRACE("GapFill: registered sub_{:08X} (0x{:08X}-0x{:08X}, {} bytes)",
+                         currentStart, currentStart, segment.end, segmentSize);
+        segmentsCreated++;
+        break;
       }
-
-      // Skip if this looks like exception handler data (handler ptr + rdata ptr)
-      if (looksLikeExceptionData(binary, graph, segment.start))
-        continue;
-
-      uint32_t segmentSize = segment.size();
-      graph.addFunction(segment.start, segmentSize, FunctionAuthority::GAP_FILL, false);
-
-      REXCODEGEN_TRACE("GapFill: registered sub_{:08X} (0x{:08X}-0x{:08X}, {} bytes)",
-                       segment.start, segment.start, segment.end, segmentSize);
-      segmentsCreated++;
     }
 
     gapsFound++;

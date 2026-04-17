@@ -1,0 +1,22 @@
+Automatic renaming of files in their long form, for Windows CE install
+cabs.  This would probably be another program using libmspack, rather than
+auto-detected by cabextract.
+
+Provide tool for finding OLE2 streams and dumping them. Some InstallShield
+Wizard use MS CAB files inside MS OLE2 streams. They look normal, but
+every so often, there's a 512 bytes extra here and a 512 bytes missing
+there, so the cabinets aren't contiguous.
+
+More advanced repair of corrupted CABs? Possible?
+
+cabjoin - a new program that will read multipart cabinets and output a
+single cabinet file containing all parts.
+
+Allow reading a cabinet from stdin.
+
+Allow an exacting list of files to be matched rather than a single pattern
+match. Allow more than one pattern match?
+
+cabextract should be localised.
+
+cabextract should not overwrite the source cabinet files when unpacking.

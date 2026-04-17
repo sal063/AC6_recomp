@@ -1,0 +1,541 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="eng">
+<head>
+<meta name="author" content="Stuart Caie" />
+<title>Windows CE installation cabinet (.CAB) file format</title>
+</head>
+<body>
+
+<h1>Windows CE installation cabinet (.CAB) file format</h1>
+
+<h2>Table of Contents</h2>
+<ul>
+<li><a href="#about">About the format</a></li>
+<li><a href="#cab_format">Overall cabinet file format</a></li>
+<li><a href="#cab_contents">Cabinet file contents</a></li>
+<li><a href="#000_format">Format of the .000 file</a>
+  <ul>
+  <li><a href="#header">The fixed size header</a></li>
+  <li><a href="#appname">The APPNAME string</a>.</li>
+  <li><a href="#provider">The PROVIDER string</a>.</li>
+  <li><a href="#unsupported">The UNSUPPORTED multi string</a>.</li>
+  <li><a href="#strings">The STRINGS section</a></li>
+  <li><a href="#dirs">The DIRS section</a></li>
+  <li><a href="#files">The FILES section</a></li>
+  <li><a href="#reghives">The REGHIVES section</a></li>
+  <li><a href="#regkeys">The REGKEYS section</a></li>
+  <li><a href="#links">The LINKS section</a></li>
+  </ul>
+</li>
+<li><a href="#app_a">Appendix A: a list of processor architectures</a></li>
+<li><a href="#app_b">Appendix B: a list of %CEn% shortcuts</a></li>
+</ul>
+
+<h2><a name="about">About the format</a></h2>
+
+<p>
+The Windows CE installation cabinet format was designed by Microsoft make
+it easy to create packaged software for the Windows CE platform. After
+generating all his executable programs, data files, help files and so on,
+a developer can then write an "installation script" which lists the name
+of the software package, where each file should be installed on the target
+device's filesystem, registry entries to make on the target system's
+Windows Registry, and so on. A tool called "CabWiz" takes the installation
+script and produces a single CAB file with a special control file stored
+in it. On the target Windows CE device, a program called
+<tt>WCELOAD.EXE</tt> will read cabinet files, install them, register them
+as installed packages, set their registry entries, and so on.
+</p>
+
+<p>
+The Cabinet format was previously developed by Microsoft for creating a
+simple archive format for packaged software, from entire operating systems
+down to ActiveX Web plugins. They also intended to displace Sun's JAR
+format for packaging Java software, but this did not succeed.
+</p>
+
+<h2><a name="cab_format">Overall cabinet file format</a></h2>
+
+<p>
+Firstly, the overall file format of a Windows CE installation cabinet is
+the standard Microsoft Cabinet file format. This was originally documented
+in the Microsoft document <tt>CABFMT.DOC</tt> as part of the Microsoft
+Cabinet SDK (<tt>CAB-SDK.EXE</tt>), it is now documented in the <a
+href="http://msdn.microsoft.com/en-us/library/bb267310%28VS.85%29.aspx">Windows
+Installer documentation</a>.  The format can also be gleaned from open
+source tools and libraries such as <a
+href="https://www.cabextract.org.uk/">cabextract</a> and <a
+href="https://www.cabextract.org.uk/libmspack/">libmspack</a>. Windows CE
+installation cabinets typically use no compression (the NONE compression
+method in the cabinet specification), sometimes MSZIP compression.
+</p>
+
+<h2><a name="cab_contents">Cabinet file contents</a></h2>
+<p>
+The filenames of the files in the cabinet use the MS-DOS "8.3" convention,
+where the first eight characters in the filename come from the "true
+filename", and are followed by a period and three numeric digits. The
+digits form a decimal number from 000 to 999. The name part before the
+period is currently always 8 characters (shorter names are padded on the
+left with "0"), but this shouldn't be relied upon. Only the numeric
+extension should be used to identify the file. There should not be more
+than one file in the cabinet with the same numeric extension. As an
+example:
+</p>
+
+<table border="1">
+<tr><th>Name in cab file</th><th>Original filename</th></tr>
+<tr><td><tt>BLKJAC~4.000</tt></td><td>--- (installation data)</td></tr>
+<tr><td><tt>BLACKJ~1.999</tt></td><td>Blackjack Setup.dll</td></tr>
+<tr><td><tt>SELFRE~1.006</tt></td><td>SelfRegister.dll</td></tr>
+<tr><td><tt>0Blkjack.005</tt></td><td>Blkjack.exe</td></tr>
+<tr><td><tt>00Sample.004</tt></td><td>Sample.BJL</td></tr>
+<tr><td><tt>WINGAM~1.003</tt></td><td>Win Game.wav</td></tr>
+<tr><td><tt>LOSEGA~1.002</tt></td><td>Lose Game.wav</td></tr>
+<tr><td><tt>BLACKJ~1.001</tt></td><td>Blackjack Help.htp</td></tr>
+</table>
+
+<p>
+The order of these files within the cab file is important. The first file
+in the cabinet should be the ".000" file. It should then be followed by
+all other files in descending numerical order of their extensions.
+</p>
+
+
+<p>These original filenames are not recoverable, they are not stored
+anywhere. The only names available are the target filenames given in <a
+href="#files">the FILES section</a> of <a href="#000_format">the .000
+file</a>.</p>
+
+<p>
+All installation data is contained in the .000 file. If a .999 file
+exists, it is an "application specific Setup.DLL"; a Microsoft standard
+Dynamic Link Library that will be loaded and executed after installation
+by the installation program. All other files are files for installation on
+the Windows CE device, and the three digits should be resolved into an
+integer "file number".
+</p>
+
+<h2><a name="000_format">Format of the .000 file</a></h2>
+
+<p>
+All multi-byte integers are little-endian. Values given in this document
+are in decimal, unless otherwise specified. The overall file format of the
+.000 file is as follows:
+</p>
+
+<ul>
+<li><a href="#header">A fixed size header</a> at file offset 0.</li>
+<li><a href="#appname">The APPNAME string</a>.</li>
+<li><a href="#provider">The PROVIDER string</a>.</li>
+<li><a href="#unsupported">The UNSUPPORTED multi string</a>.</li>
+<li><a href="#strings">The STRINGS section</a>.</li>
+<li><a href="#dirs">The DIRS section</a>.</li>
+<li><a href="#files">The FILES section</a>.</li>
+<li><a href="#reghives">The REGHIVES section</a>.</li>
+<li><a href="#regkeys">The REGKEYS section</a>.</li>
+<li><a href="#links">The LINKS section</a>.</li>
+</ul>
+
+<p>
+Only the fixed size header has a fixed file offset, all other strings and
+sections may be at any file offset, in any order. They are typically in
+the order given above. Each file offset is given in the fixed size header.
+</p>
+
+<h3><a name="header">The fixed size header</a></h3>
+<p>
+The .000 file begins at file offset 0 with a fixed size header of exactly
+100 bytes. The format of this header is as follows:
+</p>
+
+<table border="1">
+<tr><th>Offset</th><th>Size in bytes</th><th>Description</th></tr>
+<tr><td>0</td><td>4</td><td>An ASCII signature, "MSCE". This is 0x4543534D
+as a little-endian integer.</td></tr>
+<tr><td>4</td><td>4</td><td>Unknown purpose, usually 0.</td></tr>
+<tr><td>8</td><td>4</td><td>The overall length of this .000 header file,
+in bytes.</td></tr>
+<tr><td>12</td><td>4</td><td>Unknown purpose, usually 0.</td></tr>
+<tr><td>16</td><td>4</td><td>Unknown purpose, usually 1.</td></tr>
+<tr><td>20</td><td>4</td><td>Target architecture for this cabinet: see <a
+href="#app_a">Appendix A</a>.</td></tr>
+<tr><td>24</td><td>4</td><td>Minimal version of WinCE (major version
+number) required to install this cabinet, or 0 to indicate no
+restriction.</td></tr>
+<tr><td>28</td><td>4</td><td>Minimal version of WinCE (minor version
+number) required to install this cabinet, or 0 to indicate no
+restriction.</td></tr>
+<tr><td>32</td><td>4</td><td>Maximal version of WinCE (major version
+number) required to install this cabinet, or 0 to indicate no
+restriction.</td></tr>
+<tr><td>36</td><td>4</td><td>Maximal version of WinCE (minor version
+number) required to install this cabinet, or 0 to indicate no
+restriction.</td></tr>
+<tr><td>40</td><td>4</td><td>Minmal version of WinCE (build number)
+required to install this cabinet, or 0 to indicate no
+restriction.</td></tr>
+<tr><td>44</td><td>4</td><td>Maximal version of WinCE (build number)
+required to install this cabinet, or 0 to indicate no
+restriction.</td></tr>
+<tr><td>48</td><td>2</td><td>The number of entries in <a
+href="#strings">the STRINGS section</a>.</td></tr>
+<tr><td>50</td><td>2</td><td>The number of entries in <a href="#dirs">the
+DIRS section</a>.</td></tr>
+<tr><td>52</td><td>2</td><td>The number of entries in <a href="#files">the
+FILES section</a>.</td></tr>
+<tr><td>54</td><td>2</td><td>The number of entries in <a
+href="#reghives">the REGHIVES section</a>.</td></tr>
+<tr><td>56</td><td>2</td><td>The number of entries in <a
+href="#regkeys">the REGKEYS section</a>.</td></tr>
+<tr><td>58</td><td>2</td><td>The number of entries in <a href="#links">the
+LINKS section</a>.</td></tr>
+<tr><td>60</td><td>4</td><td>The file offset of <a href="#strings">the
+STRINGS section</a> in bytes.</td></tr>
+<tr><td>64</td><td>4</td><td>The file offset of <a href="#dirs">the DIRS
+section</a> in bytes.</td></tr>
+<tr><td>68</td><td>4</td><td>The file offset of <a href="#files">the FILES
+section</a> in bytes.</td></tr>
+<tr><td>72</td><td>4</td><td>The file offset of <a href="#reghives">the
+REGHIVES section</a> in bytes.</td></tr>
+<tr><td>76</td><td>4</td><td>The file offset of <a href="#regkeys">the
+REGKEYS section</a> in bytes.</td></tr>
+<tr><td>80</td><td>4</td><td>The file offset of <a href="#links">the LINKS
+section</a>, in bytes.</td></tr>
+<tr><td>84</td><td>2</td><td>The file offset of <a href="#appname">the
+APPNAME string</a> in bytes.</td></tr>
+<tr><td>86</td><td>2</td><td>The length of <a href="#appname">the APPNAME
+string</a> in bytes, including null terminating byte.</td></tr>
+
+<tr><td>88</td><td>2</td><td>The file offset of <a href="#provider">the
+PROVIDER string</a> in bytes.</td></tr>
+<tr><td>90</td><td>2</td><td>The length of <a href="#provider">the PROVIDER
+string</a> in bytes, including null terminating byte.</td></tr>
+<tr><td>92</td><td>2</td><td>The file offset of <a href="#unsupported">the
+UNSUPPORTED multi string</a> in bytes.</td></tr>
+<tr><td>94</td><td>2</td><td>The length of <a href="#unsupported">the
+UNSUPPORTED multi string</a> in bytes, including null terminating
+byte.</td></tr>
+<tr><td>96</td><td>2</td><td>Unknown purpose, usually 0.</td></tr>
+<tr><td>98</td><td>2</td><td>Unknown purpose, usually 0.</td></tr>
+</table>
+
+<h3><a name="appname">The APPNAME string</a></h3>
+<p>
+This is a null-terminated ASCII string that gives the name of the packaged
+application.
+</p>
+
+<h3><a name="provider">The PROVIDER string</a></h3>
+<p>
+This is a null-terminated ASCII string that gives the name of the author
+or publisher of the packaged application.
+</p>
+
+<h3><a name="unsupported">The UNSUPPORTED multi string</a></h3>
+<p>
+If this string has more than zero bytes length according to the fixed size
+header, then this is a sequence of consecutive null terminated ASCII
+strings.  The sequence always terminates with an empty string. Each string
+is the ASCII name of a Windows CE platform where this software is not
+supported and will not run. Platforms seen in this sequence include "PALM
+PC", "HPC", "JORDAN", "PALM PC2" and "POCKETPC".
+</p>
+
+<h3><a name="strings">The STRINGS section</a></h3>
+<p>
+The STRINGS section is a number of common ASCII strings that may be used
+in the installation data. In other sections, strings from the STRINGS
+section are referred to by their string ID. The total number of entries in
+this section is given in the fixed size header. There is no padding
+between string entries. The format of each STRING entry is as follows:
+</p>
+
+<ul>
+<li>2 bytes: An integer string ID.</li>
+<li>2 bytes: The length of the string, including the null terminator byte.</li>
+<li>X bytes: the string itself, for the length given above.</li>
+</ul>
+
+<p>
+As an example, the hexadecimal byte stream <tt>04 00 09 00 53 6F 66 74 77
+61 72 65 00</tt> decodes to "ID=4 (04 00), length=9 (09 00),
+string=Software". The hexadecimal byte stream <tt>05 00 0A 00 4D 69 63 72
+6F 73 6F 66 74 00</tt> decodes to "ID=5 (05 00), length=10 (0A 00),
+string=Microsoft".
+</p>
+
+<h3><a name="dirs">The DIRS section</a></h3>
+<p>
+The DIRS section is a list of directory paths used in the installation. In
+other sections, paths from the DIRS section are referred to by their
+directory ID. The total number of entries in this section is given in the
+fixed size header. There is no padding between directory entries.  The
+format of each directory entry is as follows:
+</p>
+
+<ul>
+<li>2 bytes: An integer directory ID.</li>
+<li>2 bytes: The length of the following directory specification, in
+bytes.</li>
+<li>X bytes: A directory specification. This is simply an array of 16-bit
+(2 byte) numbers, where each number is a string ID. The final number is
+always 0, which terminates the list.</li>
+</ul>
+
+<p>
+For example, the hexidecimal byte stream <tt>01 00 0A 00 01 00 02 00 03 00
+04 00 00</tt> translates "dir ID=1 (01 00), length=10 (0A 00),
+specification={1, 2, 3, 4}". Assuming string ID 1 is "foo", string ID 2 is
+"bar", string ID 3 is "baz" and string ID 4 is "quux", the specification
+translates from {1, 2, 3, 4} to "foo\bar\baz\quux".
+</p>
+
+<p>
+The directory specification may begin with a path member of the form
+"<tt>%CEn%</tt>", where <tt>n</tt> is a decimal integer from 1 to 17. This
+is an abbreviation for one of the CE standard directories, as listed in <a
+href="#app_b">Appendix B</a>.
+</p>
+
+
+<h3><a name="files">The FILES section</a></h3>
+<p>
+The FILES section is a list of files to be installed on the target
+device. All files in the list should be installed. In other sections,
+files from the FILES section are referred to by their file ID. The total
+number of entries in this section is given in the fixed size header. There
+is no padding between file entries. The format of each file entry is as
+follows:
+</p>
+
+<ul>
+<li>2 bytes: An integer file ID. The file for installation is the file in
+the cabinet which has this integer as a three digit file extension.</li>
+<li>2 bytes: The directory ID for where this file should be installed.</li>
+<li>2 bytes: Unknown purpose, usually the same as the file ID.</li>
+
+<li>4 bytes: File flags. A 32-bit integer. The following bits are known: <br />
+
+<table border="1">
+<tr><th>Flag</th><th>Description</th></tr>
+<tr><td>Bit 31 (0x80000000)</td><td> If bit is set, this file is a
+reference-counting shared file. It is not deleted at uninstall time unless
+its reference count is 0.</td></tr>
+<tr><td>Bit 30 (0x40000000)</td><td>If bit is set, ignore file date
+(stored in the cabinet file) and always overwrite target (on CE
+device). Mutually exclusive with bit 29.</td></tr>
+<tr><td>Bit 29 (0x20000000)</td><td>If bit is set, do not overwrite target
+if target is newer. Mutually exclusive with bit 30.</td></tr>
+<tr><td>Bit 28 (0x10000000)</td><td>If bit is set, self-register this
+DLL.</td></tr>
+<tr><td>Bit 10 (0x00000400)</td><td>If bit is set, do not copy this file
+to the target unless the target already exists. Mutually exclusive with
+bit 4.</td></tr>
+<tr><td>Bit 4 (0x00000010)</td><td>If bit is set, do not overwrite target
+if it already exists. Mutually exclusive with bit 10.</td></tr>
+<tr><td>Bit 1 (0x00000002)</td><td>If bit is set, do not skip this
+file.</td></tr>
+<tr><td>Bit 0 (0x00000001)</td><td>If bit is set, warn the user if this
+file is skipped.</td></tr>
+</table>
+All other bits are unknown.
+</li>
+<li>2 bytes: the length of the installed file's filename, including the
+null terminator.</li>
+<li>X bytes: the installed file's filename, with the length given above.
+A null terminated ASCII string.</li>
+</ul>
+
+<h3><a name="reghives">The REGHIVES section</a></h3>
+<p>
+The REGHIVES section is a list of hives in the Windows Registry. These
+hives are then used in <a href="#regkeys">the REGKEYS section</a> for
+actual registry entries. In other sections, hives from the REGHIVES
+section are referred to by their hive ID. The total number of entries in
+this section is given in the fixed size header. There is no padding
+between hive entries.  The format of each hive entry is as follows:
+</p>
+
+<ul>
+<li>2 bytes: An integer hive ID.</li>
+<li>2 bytes: The hive root, an integer from 1 to 4:
+  <ol>
+  <li>HKCR: HKEY_CLASSES_ROOT</li>
+  <li>HKCU: HKEY_CURRENT_USER</li>
+  <li>HKLM: HKEY_LOCAL_MACHINE</li>
+  <li>HKU: HKEY_USERS</li>
+  </ol>
+</li>
+<li>2 bytes: Unknown purpose, usually 0.</li>
+<li>2 bytes: Length of the registry hive specification to follow, in
+bytes.</li>
+<li>X bytes: A registry hive specification. This is simply an array of
+16-bit (2 byte) numbers, where each number is a string ID. The final
+number is always 0, which terminates the list.</li>
+</ul>
+
+<h3><a name="regkeys">The REGKEYS section</a></h3>
+<p>
+The REGKEYS is a list of registry entries -- key / data pairs -- to be
+added to the Windows Registry upon installation. All entries in the list
+should be added. The total number of entries in this section is given in
+the fixed size header. There is no padding between entries.  The format of
+each entry is as follows:
+</p>
+
+<ul>
+<li>2 bytes: An integer key ID.</li>
+<li>2 bytes: The hive ID of the hive to store this entry in.</li>
+<li>2 bytes: A Boolean value, either 1 if variable substitution should be performed or 0 if not. The entry data should have substrings such as <tt>%InstallDir%</tt> or one the <tt>%CEn%</tt> values.</li>
+<li>4 bytes: The type of entry data, and flags. <br />
+
+<table border="1">
+<tr><th>Flag</th><th>Description</th></tr>
+<tr><td>Bit 16 set, bit 0 set (0x00010001)</td><td>This key is of type
+<tt>TYPE_DWORD</tt>, a 32-bit integer.</td></tr>
+<tr><td>Bit 16 clear, bit 0 clear (0x00000000)</td><td>This key is of type
+<tt>TYPE_SZ</tt>, a null terminated ASCII string.</td></tr>
+<tr><td>Bit 16 set, bit 0 clear (0x00010000)</td><td>This key is of type
+<tt>TYPE_MULTI_SZ</tt>, a list of null terminated ASCII strings.</td></tr>
+<tr><td>Bit 16 clear, bit 0 set (0x00000001)</td><td>This key is of type
+<tt>TYPE_BINARY</tt>, raw binary data in no particular format.</td></tr>
+<tr><td>Bit 1 (0x00000002)</td><td>This is the only known flag,
+<tt>NOCLOBBER</tt>. If this bit is set, the registry entry should not be
+overwritten if it already exists in the registry.</td></tr>
+</table>
+All other bits are undefined.
+</li>
+<li>2 bytes: The length of entry data to follow, in bytes.</li>
+<li>X bytes: Registry entry data. This begins with a null terminated ASCII
+string, giving the name of the registry key. If the empty string is used
+here, this is the default key for the given hive. Immediately following
+the null byte of the string is the data for the registry entry, whose
+format depends on the entry type given in the flags:
+
+<ul>
+<li><tt>TYPE_DWORD</tt>: four bytes, giving a single 32-bit integer.</li>
+<li><tt>TYPE_SZ</tt>: a single null terminated ASCII string.</li>
+<li><tt>TYPE_MULTI_SZ</tt>: a sequence of consecutive null terminated
+ASCII strings. The sequence always terminates with an empty string.</li>
+<li><tt>TYPE_BINARY</tt>: no specific format, just raw data.</li>
+</ul>
+</li>
+</ul>
+
+
+
+<h3><a name="links">The LINKS section</a></h3>
+<p>
+The LINKS section is a list of symbolic links to be made in the standard
+installation directories, to link to installed directories or files. The
+total number of links in this section is given in the fixed size header.
+There is no padding between links.  Each link has the following format:
+</p>
+<ul>
+<li>2 bytes: An integer link ID.</li>
+<li>2 bytes: Unknown purpose.</li>
+<li>2 bytes: The base directory where the link will be stored, either 0 to
+indicate "<tt>%InstallDir%</tt>", the default directory where the
+application is installed, or a number from 1 to 17 to indicate
+"<tt>%CEn%</tt>", one of the standard installation directories as defined
+in <a href="#app_b">Appendix B</a>. The link specification, given below,
+should be added to this base directory, to get the full name of the
+link.</li>
+<li>2 bytes: Integer ID of the file or directory that the link should
+point to. It is either a file ID, or a directory ID, depending on the link
+type. If it is a directory ID, the ID 0 can be used to refer to
+<tt>%InstallDir%</tt>.</li>
+<li>2 bytes: The link type. This is 0 if the link target is a directory,
+or 1 if the link target is a file.</li>
+<li>2 bytes: The length of the link specification in bytes.</li>
+<li>X bytes: The link specification. This is simply an array of 16-bit (2
+byte) numbers, where each number is a string ID. The final number is
+always 0, which terminates the list.</li>
+</ul>
+
+<h2><a name="app_a">Appendix A: a list of processor architectures</a></h2>
+<table border="1">
+<tr><th>Value</th><th>Description</th></tr>
+<tr><td>0</td><td>No specific architecture</td></tr>
+<tr><td>103</td><td>SHx SH3</td></tr>
+<tr><td>104</td><td>SHx SH4</td></tr>
+<tr><td>386</td><td>Intel 386</td></tr>
+<tr><td>486</td><td>Intel 486</td></tr>
+<tr><td>586</td><td>Intel Pentium</td></tr>
+<tr><td>601</td><td>PowerPC 601</td></tr>
+<tr><td>603</td><td>PowerPC 603</td></tr>
+<tr><td>604</td><td>PowerPC 604</td></tr>
+<tr><td>620</td><td>PowerPC 620</td></tr>
+<tr><td>821</td><td>Motorola 821</td></tr>
+<tr><td>1824</td><td>ARM 720</td></tr>
+<tr><td>2080</td><td>ARM 820</td></tr>
+<tr><td>2336</td><td>ARM 920</td></tr>
+<tr><td>2577</td><td>StrongARM</td></tr>
+<tr><td>4000</td><td>MIPS R4000</td></tr>
+<tr><td>10003</td><td>Hitachi SH3</td></tr>
+<tr><td>10004</td><td>Hitachi SH3E</td></tr>
+<tr><td>10005</td><td>Hitachi SH4</td></tr>
+<tr><td>21064</td><td>Alpha 21064</td></tr>
+<tr><td>70001</td><td>ARM 7TDMI</td></tr>
+</table>
+
+<h2><a name="app_b">Appendix B: a list of %CEn% shortcuts</a></h2>
+<p>
+First, for a Handheld PC:
+</p>
+
+<table border="1">
+<tr><th>Value</th><th>Standard directory</th></tr>
+<tr><td>%CE1%</td><td>\Program Files</td></tr>
+<tr><td>%CE2%</td><td>\Windows</td></tr>
+<tr><td>%CE3%</td><td>\Windows\Desktop</td></tr>
+<tr><td>%CE4%</td><td>\Windows\StartUp</td></tr>
+<tr><td>%CE5%</td><td>\My Documents</td></tr>
+<tr><td>%CE6%</td><td>\Program Files\Accessories</td></tr>
+<tr><td>%CE7%</td><td>\Program Files\Communications</td></tr>
+<tr><td>%CE8%</td><td>\Program Files\Games</td></tr>
+<tr><td>%CE9%</td><td>\Program Files\Pocket Outlook</td></tr>
+<tr><td>%CE10%</td><td>\Program Files\Office</td></tr>
+<tr><td>%CE11%</td><td>\Windows\Programs</td></tr>
+<tr><td>%CE12%</td><td>\Windows\Programs\Accessories</td></tr>
+<tr><td>%CE13%</td><td>\Windows\Programs\Communications</td></tr>
+<tr><td>%CE14%</td><td>\Windows\Programs\Games</td></tr>
+<tr><td>%CE15%</td><td>\Windows\Fonts</td></tr>
+<tr><td>%CE16%</td><td>\Windows\Recent</td></tr>
+<tr><td>%CE17%</td><td>\Windows\Favorites</td></tr>
+</table>
+
+<p>
+For a Pocket PC version 1.0 or 2.0, as per Handheld PCs, except
+</p>
+<table border="1">
+<tr><th>Value</th><th>Standard directory</th></tr>
+<tr><td>%CE3%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE9%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE10%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE11%</td><td>\Windows\Start Menu\Programs</td></tr>
+<tr><td>%CE12%</td><td>\Windows\Start Menu\Accessories</td></tr>
+<tr><td>%CE13%</td><td>\Windows\Start Menu\Communications</td></tr>
+<tr><td>%CE14%</td><td>\Windows\Start Menu\Games</td></tr>
+<tr><td>%CE16%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE17%</td><td>\Windows\Start Menu</td></tr>
+</table>
+
+<p>
+For a Pocket PC version 3.0, as for 1.0 or 2.0, except
+</p>
+<table border="1">
+<tr><th>Value</th><th>Standard directory</th></tr>
+<tr><td>%CE6%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE7%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE8%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE12%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE13%</td><td><b>undefined</b></td></tr>
+<tr><td>%CE16%</td><td><b>undefined</b></td></tr>
+</table>
+
+</body>
+</html>

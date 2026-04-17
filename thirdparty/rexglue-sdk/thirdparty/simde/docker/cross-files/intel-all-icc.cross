@@ -1,0 +1,20 @@
+[binaries]
+c = 'icc'
+cpp = 'icpc'
+ar = 'ar'
+strip = 'strip'
+objcopy = 'objcopy'
+ld = 'ld'
+exe_wrapper = ['sde64', '-tgl', '--']
+
+[properties]
+c_args = ['-march=tigerlake', '-Wextra', '-wd13200', '-wd13203', '-wd16219', '-diag-disable=10441', '-Werror']
+c_link_args = ['-diag-disable=10441']
+cpp_args = ['-march=tigerlake', '-Wextra', '-wd13200', '-wd13203', '-wd16219', '-diag-disable=10441', '-Werror']
+cpp_link_args = ['-diag-disable=10441']
+
+[host_machine]
+system = 'linux'
+cpu_family = 'x86_64-all'
+cpu = 'x86_64'
+endian = 'little'

@@ -1,0 +1,49 @@
+#!/bin/sh
+# test cabextract --encoding option
+. test/testcase
+
+# skip test if cabextract has no --encoding option
+if [ `"$cabextract" -h 2>&1 | grep -c encoding` -eq 0 ]; then
+    exit 77
+fi
+
+"$cabextract" -e koi8-ru -l cabs/encoding-koi8.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/encoding-koi8.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | Здравствуйте, это канал об аниме?
+         0 | 12.03.1997 11:13:52 | Да.
+         0 | 12.03.1997 11:13:52 | Как мне пропатчить KDE2 под FreeBSD?
+
+All done, no errors.
+EOF
+
+"$cabextract" -e iso-8859-1 -l cabs/encoding-latin1.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/encoding-latin1.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 |  ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿
+         0 | 12.03.1997 11:13:52 | ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß
+         0 | 12.03.1997 11:13:52 | àáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ
+
+All done, no errors.
+EOF
+
+"$cabextract" -e sjis -l cabs/encoding-sjis.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/encoding-sjis.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | 猿も木から落ちる
+         0 | 12.03.1997 11:13:52 | 虎穴に入らずんば虎子を得ず
+         0 | 12.03.1997 11:13:52 | この父にしてこの子あり
+         0 | 12.03.1997 11:13:52 | ｡｢｣､･ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ
+         0 | 12.03.1997 11:13:52 | あいうえおかきくけこざしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん
+         0 | 12.03.1997 11:13:52 | アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

@@ -1,0 +1,150 @@
+/**
+ * ReXGlue native filesystem layer
+ * Part of the AC6 Recompilation project
+ */
+
+#include <algorithm>
+
+#include <native/filesystem.h>
+#include <native/filesystem/device.h>
+#include <native/filesystem/entry.h>
+#include <rex/assert.h>
+#include <rex/string.h>
+
+namespace rex::filesystem {
+
+Entry::Entry(Device* device, Entry* parent, const std::string_view path)
+    : device_(device),
+      parent_(parent),
+      path_(path),
+      attributes_(0),
+      size_(0),
+      allocation_size_(0),
+      create_timestamp_(0),
+      access_timestamp_(0),
+      write_timestamp_(0) {
+  assert_not_null(device);
+  absolute_path_ = rex::string::utf8_join_guest_paths(device->mount_path(), path);
+  name_ = rex::string::utf8_find_name_from_guest_path(path);
+}
+
+Entry::~Entry() = default;
+
+void Entry::Dump(rex::string::StringBuffer* string_buffer, int indent) {
+  for (int i = 0; i < indent; ++i) {
+    string_buffer->Append(' ');
+  }
+  string_buffer->Append(name());
+  string_buffer->Append('\n');
+  for (auto& child : children_) {
+    child->Dump(string_buffer, indent + 2);
+  }
+}
+
+bool Entry::is_read_only() const {
+  return device_->is_read_only();
+}
+
+Entry* Entry::GetChild(const std::string_view name) {
+  auto global_lock = global_critical_region_.Acquire();
+  auto it = std::find_if(children_.cbegin(), children_.cend(), [&](const auto& child) {
+    return rex::string::utf8_equal_case(child->name(), name);
+  });
+  if (it == children_.cend()) {
+    return nullptr;
+  }
+  return (*it).get();
+}
+
+Entry* Entry::ResolvePath(const std::string_view path) {
+  // Walk the path, one separator at a time.
+  Entry* entry = this;
+  for (auto& part : rex::string::utf8_split_path(path)) {
+    entry = entry->GetChild(part);
+    if (!entry) {
+      // Not found.
+      return nullptr;
+    }
+  }
+  return entry;
+}
+
+Entry* Entry::IterateChildren(const rex::filesystem::WildcardEngine& engine,
+                              size_t* current_index) {
+  auto global_lock = global_critical_region_.Acquire();
+  while (*current_index < children_.size()) {
+    auto& child = children_[*current_index];
+    *current_index = *current_index + 1;
+    if (engine.Match(child->name())) {
+      return child.get();
+    }
+  }
+  return nullptr;
+}
+
+Entry* Entry::CreateEntry(const std::string_view name, uint32_t attributes) {
+  auto global_lock = global_critical_region_.Acquire();
+  if (is_read_only()) {
+    return nullptr;
+  }
+  if (GetChild(name)) {
+    // Already exists.
+    return nullptr;
+  }
+  auto entry = CreateEntryInternal(name, attributes);
+  if (!entry) {
+    return nullptr;
+  }
+  children_.push_back(std::move(entry));
+  Touch();
+  return children_.back().get();
+}
+
+bool Entry::Delete(Entry* entry) {
+  auto global_lock = global_critical_region_.Acquire();
+  if (is_read_only()) {
+    return false;
+  }
+  if (entry->parent() != this) {
+    return false;
+  }
+  if (!DeleteEntryInternal(entry)) {
+    return false;
+  }
+  for (auto it = children_.begin(); it != children_.end(); ++it) {
+    if (it->get() == entry) {
+      children_.erase(it);
+      break;
+    }
+  }
+  Touch();
+  return true;
+}
+
+bool Entry::Delete() {
+  assert_not_null(parent_);
+  return parent_->Delete(this);
+}
+
+void Entry::Rename(const std::filesystem::path& file_path) {
+  // Store the string so split path string_views remain valid.
+  const std::string path_str = rex::path_to_utf8(file_path);
+  std::vector<std::string_view> path_parts = rex::string::utf8_split_path(path_str);
+  if (!path_parts.empty()) {
+    // Drop root path (for example, "game:").
+    path_parts.erase(path_parts.begin());
+  }
+
+  RenameEntryInternal(path_parts);
+
+  const std::string guest_path = rex::string::utf8_join_guest_paths(path_parts);
+  absolute_path_ = rex::string::utf8_join_guest_paths(device_->mount_path(), guest_path);
+  path_ = guest_path;
+  name_ = rex::path_to_utf8(file_path.filename());
+}
+
+void Entry::Touch() {
+  // TODO: update timestamps.
+}
+
+}  // namespace rex::filesystem

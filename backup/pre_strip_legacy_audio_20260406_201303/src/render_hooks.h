@@ -1,0 +1,31 @@
+#pragma once
+
+#include <cstdint>
+
+#include <rex/cvar.h>
+#include <rex/ppc/types.h>
+
+REXCVAR_DECLARE(bool, ac6_unlock_fps);
+
+namespace ac6 {
+
+struct FrameStats {
+    double frame_time_ms{0.0};
+    double fps{0.0};
+    uint64_t frame_count{0};
+    bool movie_audio_active{false};
+    uint32_t movie_audio_client_count{0};
+    uint64_t movie_audio_register_count{0};
+    uint64_t movie_audio_submit_count{0};
+    uint32_t movie_audio_owner{0};
+    uint32_t movie_audio_driver{0};
+};
+
+FrameStats GetFrameStats();
+
+}  // namespace ac6
+
+bool ac6FlipIntervalHook();
+bool ac6PresentIntervalHook(PPCRegister& r10);
+void ac6DeltaDivisorHook(PPCRegister& r29);
+void ac6PresentTimingHook(PPCRegister& r31);

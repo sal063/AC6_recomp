@@ -1,0 +1,955 @@
+// Native UI runtime - GTK window implementation
+// Part of the AC6 Recompilation native presenter/window layer
+
+#include <algorithm>
+#include <string>
+
+#include <rex/assert.h>
+#include <rex/cvar.h>
+#include <rex/graphics/flags.h>
+#include <rex/graphics/video_mode_util.h>
+#include <rex/logging.h>
+#include <rex/platform.h>
+#include <rex/ui/flags.h>
+#include <native/ui/surface_gnulinux.h>
+#include <rex/ui/virtual_key.h>
+#include <native/ui/window_gtk.h>
+
+#include <X11/Xlib-xcb.h>
+#include <gdk/gdkx.h>
+#include <xcb/xcb.h>
+
+namespace {
+
+uint32_t ResolveWindowWidth(uint32_t requested_width) {
+  if (REXCVAR_GET(window_width) > 0) {
+    return uint32_t(REXCVAR_GET(window_width));
+  }
+  if (!rex::cvar::HasNonDefaultValue("window_width")) {
+    if (rex::cvar::HasNonDefaultValue("video_mode_width") && REXCVAR_GET(video_mode_width) > 0) {
+      return uint32_t(std::clamp(REXCVAR_GET(video_mode_width), 1, 8192));
+    }
+    int32_t preset_width = 0;
+    int32_t preset_height = 0;
+    if (rex::graphics::video_mode_util::TryGetResolutionPresetFromCVar(preset_width,
+                                                                       preset_height)) {
+      return uint32_t(std::clamp(preset_width, 1, 8192));
+    }
+  }
+  return requested_width;
+}
+
+uint32_t ResolveWindowHeight(uint32_t requested_height) {
+  if (REXCVAR_GET(window_height) > 0) {
+    return uint32_t(REXCVAR_GET(window_height));
+  }
+  if (!rex::cvar::HasNonDefaultValue("window_height")) {
+    if (rex::cvar::HasNonDefaultValue("video_mode_height") && REXCVAR_GET(video_mode_height) > 0) {
+      return uint32_t(std::clamp(REXCVAR_GET(video_mode_height), 1, 8192));
+    }
+    int32_t preset_width = 0;
+    int32_t preset_height = 0;
+    if (rex::graphics::video_mode_util::TryGetResolutionPresetFromCVar(preset_width,
+                                                                       preset_height)) {
+      return uint32_t(std::clamp(preset_height, 1, 8192));
+    }
+  }
+  return requested_height;
+}
+
+using rex::ui::VirtualKey;
+
+VirtualKey TranslateGdkKeyvalToVirtualKey(guint keyval) {
+  switch (keyval) {
+    // Function keys.
+    case GDK_KEY_F1:
+      return VirtualKey::kF1;
+    case GDK_KEY_F2:
+      return VirtualKey::kF2;
+    case GDK_KEY_F3:
+      return VirtualKey::kF3;
+    case GDK_KEY_F4:
+      return VirtualKey::kF4;
+    case GDK_KEY_F5:
+      return VirtualKey::kF5;
+    case GDK_KEY_F6:
+      return VirtualKey::kF6;
+    case GDK_KEY_F7:
+      return VirtualKey::kF7;
+    case GDK_KEY_F8:
+      return VirtualKey::kF8;
+    case GDK_KEY_F9:
+      return VirtualKey::kF9;
+    case GDK_KEY_F10:
+      return VirtualKey::kF10;
+    case GDK_KEY_F11:
+      return VirtualKey::kF11;
+    case GDK_KEY_F12:
+      return VirtualKey::kF12;
+    case GDK_KEY_F13:
+      return VirtualKey::kF13;
+    case GDK_KEY_F14:
+      return VirtualKey::kF14;
+    case GDK_KEY_F15:
+      return VirtualKey::kF15;
+    case GDK_KEY_F16:
+      return VirtualKey::kF16;
+    case GDK_KEY_F17:
+      return VirtualKey::kF17;
+    case GDK_KEY_F18:
+      return VirtualKey::kF18;
+    case GDK_KEY_F19:
+      return VirtualKey::kF19;
+    case GDK_KEY_F20:
+      return VirtualKey::kF20;
+    case GDK_KEY_F21:
+      return VirtualKey::kF21;
+    case GDK_KEY_F22:
+      return VirtualKey::kF22;
+    case GDK_KEY_F23:
+      return VirtualKey::kF23;
+    case GDK_KEY_F24:
+      return VirtualKey::kF24;
+
+    // Control and navigation.
+    case GDK_KEY_Escape:
+      return VirtualKey::kEscape;
+    case GDK_KEY_Return:
+    case GDK_KEY_ISO_Enter:
+    case GDK_KEY_KP_Enter:
+      return VirtualKey::kReturn;
+    case GDK_KEY_space:
+    case GDK_KEY_KP_Space:
+      return VirtualKey::kSpace;
+    case GDK_KEY_Tab:
+    case GDK_KEY_ISO_Left_Tab:
+      return VirtualKey::kTab;
+    case GDK_KEY_BackSpace:
+      return VirtualKey::kBack;
+    case GDK_KEY_Delete:
+    case GDK_KEY_KP_Delete:
+      return VirtualKey::kDelete;
+    case GDK_KEY_Insert:
+    case GDK_KEY_KP_Insert:
+      return VirtualKey::kInsert;
+    case GDK_KEY_Home:
+    case GDK_KEY_KP_Home:
+      return VirtualKey::kHome;
+    case GDK_KEY_End:
+    case GDK_KEY_KP_End:
+      return VirtualKey::kEnd;
+    case GDK_KEY_Page_Up:
+    case GDK_KEY_KP_Page_Up:
+      return VirtualKey::kPrior;
+    case GDK_KEY_Page_Down:
+    case GDK_KEY_KP_Page_Down:
+      return VirtualKey::kNext;
+    case GDK_KEY_Left:
+    case GDK_KEY_KP_Left:
+      return VirtualKey::kLeft;
+    case GDK_KEY_Right:
+    case GDK_KEY_KP_Right:
+      return VirtualKey::kRight;
+    case GDK_KEY_Up:
+    case GDK_KEY_KP_Up:
+      return VirtualKey::kUp;
+    case GDK_KEY_Down:
+    case GDK_KEY_KP_Down:
+      return VirtualKey::kDown;
+
+    // Modifiers and lock keys.
+    case GDK_KEY_Shift_L:
+    case GDK_KEY_Shift_R:
+      return VirtualKey::kShift;
+    case GDK_KEY_Control_L:
+    case GDK_KEY_Control_R:
+      return VirtualKey::kControl;
+    case GDK_KEY_Alt_L:
+    case GDK_KEY_Alt_R:
+    case GDK_KEY_Meta_L:
+    case GDK_KEY_Meta_R:
+      return VirtualKey::kMenu;
+    case GDK_KEY_Super_L:
+      return VirtualKey::kLWin;
+    case GDK_KEY_Super_R:
+      return VirtualKey::kRWin;
+    case GDK_KEY_Menu:
+      return VirtualKey::kApps;
+    case GDK_KEY_Caps_Lock:
+      return VirtualKey::kCapital;
+    case GDK_KEY_Num_Lock:
+      return VirtualKey::kNumLock;
+    case GDK_KEY_Scroll_Lock:
+      return VirtualKey::kScroll;
+    case GDK_KEY_Print:
+      return VirtualKey::kSnapshot;
+    case GDK_KEY_Pause:
+      return VirtualKey::kPause;
+
+    // Numeric row.
+    case GDK_KEY_0:
+      return VirtualKey::k0;
+    case GDK_KEY_1:
+      return VirtualKey::k1;
+    case GDK_KEY_2:
+      return VirtualKey::k2;
+    case GDK_KEY_3:
+      return VirtualKey::k3;
+    case GDK_KEY_4:
+      return VirtualKey::k4;
+    case GDK_KEY_5:
+      return VirtualKey::k5;
+    case GDK_KEY_6:
+      return VirtualKey::k6;
+    case GDK_KEY_7:
+      return VirtualKey::k7;
+    case GDK_KEY_8:
+      return VirtualKey::k8;
+    case GDK_KEY_9:
+      return VirtualKey::k9;
+
+    // Numpad.
+    case GDK_KEY_KP_0:
+      return VirtualKey::kNumpad0;
+    case GDK_KEY_KP_1:
+      return VirtualKey::kNumpad1;
+    case GDK_KEY_KP_2:
+      return VirtualKey::kNumpad2;
+    case GDK_KEY_KP_3:
+      return VirtualKey::kNumpad3;
+    case GDK_KEY_KP_4:
+      return VirtualKey::kNumpad4;
+    case GDK_KEY_KP_5:
+      return VirtualKey::kNumpad5;
+    case GDK_KEY_KP_6:
+      return VirtualKey::kNumpad6;
+    case GDK_KEY_KP_7:
+      return VirtualKey::kNumpad7;
+    case GDK_KEY_KP_8:
+      return VirtualKey::kNumpad8;
+    case GDK_KEY_KP_9:
+      return VirtualKey::kNumpad9;
+    case GDK_KEY_KP_Add:
+      return VirtualKey::kAdd;
+    case GDK_KEY_KP_Subtract:
+      return VirtualKey::kSubtract;
+    case GDK_KEY_KP_Multiply:
+      return VirtualKey::kMultiply;
+    case GDK_KEY_KP_Divide:
+      return VirtualKey::kDivide;
+    case GDK_KEY_KP_Decimal:
+      return VirtualKey::kDecimal;
+
+    // Punctuation.
+    case GDK_KEY_grave:
+    case GDK_KEY_asciitilde:
+      return VirtualKey::kOem3;
+    case GDK_KEY_minus:
+    case GDK_KEY_underscore:
+      return VirtualKey::kOemMinus;
+    case GDK_KEY_equal:
+    case GDK_KEY_plus:
+      return VirtualKey::kOemPlus;
+    case GDK_KEY_comma:
+    case GDK_KEY_less:
+      return VirtualKey::kOemComma;
+    case GDK_KEY_period:
+    case GDK_KEY_greater:
+      return VirtualKey::kOemPeriod;
+    case GDK_KEY_semicolon:
+    case GDK_KEY_colon:
+      return VirtualKey::kOem1;
+    case GDK_KEY_slash:
+    case GDK_KEY_question:
+      return VirtualKey::kOem2;
+    case GDK_KEY_backslash:
+    case GDK_KEY_bar:
+      return VirtualKey::kOem5;
+    case GDK_KEY_bracketleft:
+    case GDK_KEY_braceleft:
+      return VirtualKey::kOem4;
+    case GDK_KEY_bracketright:
+    case GDK_KEY_braceright:
+      return VirtualKey::kOem6;
+    case GDK_KEY_apostrophe:
+    case GDK_KEY_quotedbl:
+      return VirtualKey::kOem7;
+
+    default:
+      break;
+  }
+
+  if (keyval >= GDK_KEY_a && keyval <= GDK_KEY_z) {
+    return VirtualKey(uint16_t(VirtualKey::kA) + uint16_t(keyval - GDK_KEY_a));
+  }
+  if (keyval >= GDK_KEY_A && keyval <= GDK_KEY_Z) {
+    return VirtualKey(uint16_t(VirtualKey::kA) + uint16_t(keyval - GDK_KEY_A));
+  }
+
+  return VirtualKey::kNone;
+}
+
+}  // namespace
+
+namespace rex {
+namespace ui {
+
+std::unique_ptr<Window> Window::Create(WindowedAppContext& app_context,
+                                       const std::string_view title, uint32_t desired_logical_width,
+                                       uint32_t desired_logical_height) {
+  desired_logical_width = ResolveWindowWidth(desired_logical_width);
+  desired_logical_height = ResolveWindowHeight(desired_logical_height);
+  return std::make_unique<GTKWindow>(app_context, title, desired_logical_width,
+                                     desired_logical_height);
+}
+
+GTKWindow::GTKWindow(WindowedAppContext& app_context, const std::string_view title,
+                     uint32_t desired_logical_width, uint32_t desired_logical_height)
+    : Window(app_context, title, desired_logical_width, desired_logical_height) {}
+
+GTKWindow::~GTKWindow() {
+  EnterDestructor();
+  if (window_) {
+    // Set window_ to null to ignore events from now on since this ui::GTKWindow
+    // is entering an indeterminate state.
+    GtkWidget* window = window_;
+    window_ = nullptr;
+    // Destroying the top-level window also destroys its children.
+    drawing_area_ = nullptr;
+    box_ = nullptr;
+    gtk_widget_destroy(window);
+  }
+}
+
+bool GTKWindow::OpenImpl() {
+  window_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+
+  gtk_window_set_title(GTK_WINDOW(window_), GetTitle().c_str());
+
+  // Create the vertical box container for the main menu and the drawing area.
+  box_ = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_container_add(GTK_CONTAINER(window_), box_);
+
+  // Add the main menu (even if fullscreen was requested, for the initial layout
+  // calculation).
+  const GTKMenuItem* main_menu = static_cast<const GTKMenuItem*>(GetMainMenu());
+  GtkWidget* main_menu_widget = main_menu ? main_menu->handle() : nullptr;
+  if (main_menu_widget) {
+    gtk_box_pack_start(GTK_BOX(box_), main_menu_widget, FALSE, FALSE, 0);
+  }
+
+  // Create the drawing area for creating the surface for, which will be the
+  // client area of the window occupying all the window space not taken by the
+  // main menu.
+  drawing_area_ = gtk_drawing_area_new();
+  gtk_box_pack_end(GTK_BOX(box_), drawing_area_, TRUE, TRUE, 0);
+  // The desired size is the client (drawing) area size. Let GTK auto-size the
+  // entire window around it (as well as the width of the menu actually if it
+  // happens to be bigger - the desired size in the Window will be updated later
+  // to reflect that).
+  gtk_widget_set_size_request(drawing_area_, GetDesiredLogicalWidth(), GetDesiredLogicalHeight());
+
+  // Attach the event handlers.
+  // Keyboard events are processed by the window, mouse events are processed
+  // within, and by, the drawing (client) area.
+  gtk_widget_set_events(window_, GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK | GDK_FOCUS_CHANGE_MASK);
+  gtk_widget_set_events(drawing_area_, GDK_POINTER_MOTION_MASK | GDK_BUTTON_MOTION_MASK |
+                                           GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+                                           GDK_SCROLL_MASK);
+  g_signal_connect(G_OBJECT(window_), "event", G_CALLBACK(WindowEventHandlerThunk),
+                   reinterpret_cast<gpointer>(this));
+  g_signal_connect(G_OBJECT(drawing_area_), "event", G_CALLBACK(DrawingAreaEventHandlerThunk),
+                   reinterpret_cast<gpointer>(this));
+  g_signal_connect(G_OBJECT(drawing_area_), "draw", G_CALLBACK(DrawHandler),
+                   reinterpret_cast<gpointer>(this));
+
+  // Finally show all the widgets in the window, including the main menu.
+  gtk_widget_show_all(window_);
+
+  // Remove the size request after finishing the initial layout because it makes
+  // it impossible to make the window smaller.
+  gtk_widget_set_size_request(drawing_area_, -1, -1);
+
+  // Move the window to the requested monitor before entering fullscreen.
+  if (int32_t monitor_index = REXCVAR_GET(monitor); monitor_index > 0) {
+    GdkDisplay* display = gtk_widget_get_display(window_);
+    GdkScreen* screen = gdk_display_get_default_screen(display);
+    int n_monitors = gdk_screen_get_n_monitors(screen);
+    if (monitor_index <= n_monitors) {
+      GdkRectangle geom;
+      gdk_screen_get_monitor_geometry(screen, monitor_index - 1, &geom);
+      gtk_window_move(GTK_WINDOW(window_), geom.x + (geom.width - GetDesiredLogicalWidth()) / 2,
+                      geom.y + (geom.height - GetDesiredLogicalHeight()) / 2);
+    }
+  }
+
+  // After setting up the initial layout for non-fullscreen, enter fullscreen if
+  // requested.
+  if (IsFullscreen()) {
+    if (main_menu_widget) {
+      gtk_container_remove(GTK_CONTAINER(box_), main_menu_widget);
+    }
+    gtk_window_fullscreen(GTK_WINDOW(window_));
+  }
+
+  // Make sure the initial state after opening is reported to the common Window
+  // class no matter how GTK sends the events.
+  {
+    WindowDestructionReceiver destruction_receiver(this);
+
+    // TODO(Triang3l): Report the desired client area size.
+
+    GtkAllocation drawing_area_allocation;
+    gtk_widget_get_allocation(drawing_area_, &drawing_area_allocation);
+    OnActualSizeUpdate(uint32_t(drawing_area_allocation.width),
+                       uint32_t(drawing_area_allocation.height), destruction_receiver);
+    if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+      return true;
+    }
+
+    if (gtk_window_has_toplevel_focus(GTK_WINDOW(window_))) {
+      OnFocusUpdate(true, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        return true;
+      }
+    }
+  }
+
+  return true;
+}
+
+void GTKWindow::RequestCloseImpl() {
+  gtk_window_close(GTK_WINDOW(window_));
+}
+
+void GTKWindow::ApplyNewFullscreen() {
+  // Various functions here may trigger events that may result in the listeners
+  // being invoked, and potentially cause the destruction of the window or
+  // fullscreen being toggled from inside this function.
+  WindowDestructionReceiver destruction_receiver(this);
+
+  const GTKMenuItem* main_menu = static_cast<const GTKMenuItem*>(GetMainMenu());
+  GtkWidget* main_menu_widget = main_menu ? main_menu->handle() : nullptr;
+
+  // Changing the menu and the fullscreen state may change the size of the
+  // drawing area too, don't handle the resize multiple times (also potentially
+  // with the listeners changing the desired fullscreen if called from the
+  // handling of some event like GDK_CONFIGURE).
+  BeginBatchedSizeUpdate();
+
+  if (IsFullscreen()) {
+    if (main_menu_widget) {
+      gtk_container_remove(GTK_CONTAINER(box_), main_menu_widget);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        if (!destruction_receiver.IsWindowDestroyed()) {
+          EndBatchedSizeUpdate(destruction_receiver);
+        }
+        return;
+      }
+    }
+    gtk_window_fullscreen(GTK_WINDOW(window_));
+    if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+      if (!destruction_receiver.IsWindowDestroyed()) {
+        EndBatchedSizeUpdate(destruction_receiver);
+      }
+      return;
+    }
+  } else {
+    gtk_window_unfullscreen(GTK_WINDOW(window_));
+    if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+      if (!destruction_receiver.IsWindowDestroyed()) {
+        EndBatchedSizeUpdate(destruction_receiver);
+      }
+      return;
+    }
+    if (main_menu_widget) {
+      gtk_box_pack_start(GTK_BOX(box_), main_menu_widget, FALSE, FALSE, 0);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        if (!destruction_receiver.IsWindowDestroyed()) {
+          EndBatchedSizeUpdate(destruction_receiver);
+        }
+        return;
+      }
+      // If the new menu is used for the first time, it will be in the hidden
+      // state initially. The menu might have been changed while in fullscreen
+      // without having shown it.
+      gtk_widget_show_all(main_menu_widget);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        if (!destruction_receiver.IsWindowDestroyed()) {
+          EndBatchedSizeUpdate(destruction_receiver);
+        }
+        return;
+      }
+    }
+  }
+
+  EndBatchedSizeUpdate(destruction_receiver);
+  if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+    return;
+  }
+}
+
+void GTKWindow::ApplyNewTitle() {
+  gtk_window_set_title(GTK_WINDOW(window_), GetTitle().c_str());
+}
+
+void GTKWindow::ApplyNewMainMenu(MenuItem* old_main_menu) {
+  if (IsFullscreen()) {
+    // The menu will be set when exiting fullscreen.
+    return;
+  }
+  // The fullscreen state may have been changed by some callback invoked, such
+  // as the configure (resize) one, recheck it after making changes also.
+
+  WindowDestructionReceiver destruction_receiver(this);
+
+  // Changing the menu may change the size of the drawing area too, and here the
+  // menu may be changed twice (to detach the old one and to attach the new),
+  // don't handle the resize multiple times.
+  BeginBatchedSizeUpdate();
+
+  if (old_main_menu) {
+    const GTKMenuItem& old_gtk_main_menu = *static_cast<const GTKMenuItem*>(old_main_menu);
+    gtk_container_remove(GTK_CONTAINER(box_), old_gtk_main_menu.handle());
+    if (destruction_receiver.IsWindowDestroyedOrClosed() || IsFullscreen()) {
+      if (!destruction_receiver.IsWindowDestroyed()) {
+        EndBatchedSizeUpdate(destruction_receiver);
+      }
+      return;
+    }
+  }
+
+  const GTKMenuItem* new_main_menu = static_cast<const GTKMenuItem*>(GetMainMenu());
+  if (!new_main_menu) {
+    EndBatchedSizeUpdate(destruction_receiver);
+    return;
+  }
+  GtkWidget* new_main_menu_widget = new_main_menu->handle();
+  gtk_box_pack_start(GTK_BOX(box_), new_main_menu_widget, FALSE, FALSE, 0);
+  if (destruction_receiver.IsWindowDestroyedOrClosed() || IsFullscreen()) {
+    if (!destruction_receiver.IsWindowDestroyed()) {
+      EndBatchedSizeUpdate(destruction_receiver);
+    }
+    return;
+  }
+  // If the new menu is used for the first time, it will be in the hidden state
+  // initially.
+  gtk_widget_show_all(new_main_menu_widget);
+  if (destruction_receiver.IsWindowDestroyedOrClosed() || IsFullscreen()) {
+    if (!destruction_receiver.IsWindowDestroyed()) {
+      EndBatchedSizeUpdate(destruction_receiver);
+    }
+    return;
+  }
+
+  EndBatchedSizeUpdate(destruction_receiver);
+  if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+    return;
+  }
+}
+
+void GTKWindow::FocusImpl() {
+  gtk_window_activate_focus(GTK_WINDOW(window_));
+}
+
+std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(Surface::TypeFlags allowed_types) {
+  GdkDisplay* display = gtk_widget_get_display(window_);
+  GdkWindow* drawing_area_window = gtk_widget_get_window(drawing_area_);
+  bool type_known = false;
+  bool type_supported_by_display = false;
+  if (allowed_types & Surface::kTypeFlag_XcbWindow) {
+    type_known = true;
+    if (GDK_IS_X11_DISPLAY(display)) {
+      type_supported_by_display = true;
+      return std::make_unique<XcbWindowSurface>(
+          XGetXCBConnection(gdk_x11_display_get_xdisplay(display)),
+          gdk_x11_window_get_xid(drawing_area_window));
+    }
+  }
+  // TODO(Triang3l): Wayland surface.
+  if (type_known && !type_supported_by_display) {
+    REXLOG_ERROR(
+        "GTKWindow: The window system of the GTK window is not supported by "
+        "Xenia");
+  }
+  return nullptr;
+}
+
+void GTKWindow::RequestPaintImpl() {
+  gtk_widget_queue_draw(drawing_area_);
+}
+
+void GTKWindow::HandleSizeUpdate(WindowDestructionReceiver& destruction_receiver) {
+  if (!drawing_area_) {
+    // Batched size update ended when the window has already been closed, for
+    // instance.
+    return;
+  }
+
+  // TODO(Triang3l): Report the desired client area size.
+
+  GtkAllocation drawing_area_allocation;
+  gtk_widget_get_allocation(drawing_area_, &drawing_area_allocation);
+  OnActualSizeUpdate(uint32_t(drawing_area_allocation.width),
+                     uint32_t(drawing_area_allocation.height), destruction_receiver);
+  if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+    return;
+  }
+}
+
+void GTKWindow::BeginBatchedSizeUpdate() {
+  // It's okay if batched_size_update_contained_* are not false when beginning
+  // a batched update, in case the new batched update was started by a window
+  // listener called from within EndBatchedSizeUpdate.
+  ++batched_size_update_depth_;
+}
+
+void GTKWindow::EndBatchedSizeUpdate(WindowDestructionReceiver& destruction_receiver) {
+  assert_not_zero(batched_size_update_depth_);
+  if (--batched_size_update_depth_) {
+    return;
+  }
+  // Resetting batched_size_update_contained_* in closing, not opening, because
+  // a listener may start a new batch, and finish it, and there won't be need to
+  // handle the deferred messages twice.
+  if (batched_size_update_contained_configure_) {
+    batched_size_update_contained_configure_ = false;
+    HandleSizeUpdate(destruction_receiver);
+    if (destruction_receiver.IsWindowDestroyed()) {
+      return;
+    }
+  }
+  if (batched_size_update_contained_draw_) {
+    batched_size_update_contained_draw_ = false;
+    RequestPaint();
+  }
+}
+
+bool GTKWindow::HandleMouse(GdkEvent* event, WindowDestructionReceiver& destruction_receiver) {
+  MouseEvent::Button button = MouseEvent::Button::kNone;
+  int32_t x = 0;
+  int32_t y = 0;
+  int32_t scroll_x = 0;
+  int32_t scroll_y = 0;
+  switch (event->type) {
+    case GDK_MOTION_NOTIFY: {
+      auto motion_event = reinterpret_cast<const GdkEventMotion*>(event);
+      x = motion_event->x;
+      y = motion_event->y;
+    } break;
+    case GDK_BUTTON_PRESS:
+    case GDK_BUTTON_RELEASE: {
+      auto button_event = reinterpret_cast<const GdkEventButton*>(event);
+      switch (button_event->button) {
+        case 1:
+          button = MouseEvent::Button::kLeft;
+          break;
+        case 2:
+          button = MouseEvent::Button::kMiddle;
+          break;
+        case 3:
+          button = MouseEvent::Button::kRight;
+          break;
+        case 4:
+          button = MouseEvent::Button::kX1;
+          break;
+        case 5:
+          button = MouseEvent::Button::kX2;
+          break;
+        default:
+          // Still handle the movement.
+          break;
+      }
+      x = button_event->x;
+      y = button_event->y;
+    } break;
+    case GDK_SCROLL: {
+      auto scroll_event = reinterpret_cast<const GdkEventScroll*>(event);
+      x = scroll_event->x;
+      y = scroll_event->y;
+      scroll_x = scroll_event->delta_x * MouseEvent::kScrollPerDetent;
+      // In GDK, positive is towards the bottom of the screen, not forward from
+      // the user.
+      scroll_y = -scroll_event->delta_y * MouseEvent::kScrollPerDetent;
+    } break;
+    default:
+      return false;
+  }
+
+  MouseEvent e(this, button, x, y, scroll_x, scroll_y);
+  switch (event->type) {
+    case GDK_MOTION_NOTIFY:
+      OnMouseMove(e, destruction_receiver);
+      break;
+    case GDK_BUTTON_PRESS:
+      OnMouseDown(e, destruction_receiver);
+      break;
+    case GDK_BUTTON_RELEASE:
+      OnMouseUp(e, destruction_receiver);
+      break;
+    case GDK_SCROLL:
+      OnMouseWheel(e, destruction_receiver);
+      break;
+    default:
+      break;
+  }
+  // Returning immediately anyway - no need to check
+  // destruction_receiver.IsWindowDestroyed().
+  return e.is_handled();
+}
+
+bool GTKWindow::HandleKeyboard(GdkEventKey* event,
+                               WindowDestructionReceiver& destruction_receiver) {
+  unsigned int modifiers = event->state;
+  bool shift_pressed = modifiers & GDK_SHIFT_MASK;
+  bool ctrl_pressed = modifiers & GDK_CONTROL_MASK;
+  bool alt_pressed = modifiers & (GDK_MOD1_MASK | GDK_META_MASK);
+  bool super_pressed = modifiers & GDK_SUPER_MASK;
+  uint32_t key_char = gdk_keyval_to_unicode(event->keyval);
+  KeyEvent e(this, TranslateGdkKeyvalToVirtualKey(event->keyval), 1, event->type == GDK_KEY_RELEASE,
+             shift_pressed, ctrl_pressed, alt_pressed, super_pressed);
+  switch (event->type) {
+    case GDK_KEY_PRESS:
+      OnKeyDown(e, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        return e.is_handled();
+      }
+      if (key_char > 0) {
+        KeyEvent char_event(this, VirtualKey(key_char), 1, false, shift_pressed, ctrl_pressed,
+                            alt_pressed, super_pressed);
+        OnKeyChar(char_event, destruction_receiver);
+        if (char_event.is_handled()) {
+          e.set_handled(true);
+        }
+      }
+      break;
+    case GDK_KEY_RELEASE:
+      OnKeyUp(e, destruction_receiver);
+      break;
+    default:
+      break;
+  }
+  // Returning immediately anyway - no need to check
+  // destruction_receiver.IsWindowDestroyed().
+  return e.is_handled();
+}
+
+gboolean GTKWindow::WindowEventHandler(GdkEvent* event) {
+  switch (event->type) {
+    case GDK_DELETE:
+    // In case the widget was somehow forcibly destroyed without GDK_DELETE.
+    case GDK_DESTROY: {
+      WindowDestructionReceiver destruction_receiver(this);
+      OnBeforeClose(destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyed()) {
+        break;
+      }
+      // Set window_ to null to ignore events from now on since this
+      // ui::GTKWindow is entering an indeterminate state - this should be done
+      // at some point in closing anyway.
+      GtkWidget* window = window_;
+      window_ = nullptr;
+      // Destroying the top-level window also destroys its children.
+      drawing_area_ = nullptr;
+      box_ = nullptr;
+      if (event->type != GDK_DESTROY) {
+        gtk_widget_destroy(window);
+      }
+      OnAfterClose();
+    } break;
+
+    case GDK_FOCUS_CHANGE: {
+      auto focus_event = reinterpret_cast<const GdkEventFocus*>(event);
+      WindowDestructionReceiver destruction_receiver(this);
+      OnFocusUpdate(bool(focus_event->in), destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        break;
+      }
+    } break;
+
+    case GDK_KEY_PRESS:
+    case GDK_KEY_RELEASE: {
+      WindowDestructionReceiver destruction_receiver(this);
+      HandleKeyboard(reinterpret_cast<GdkEventKey*>(event), destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        break;
+      }
+    } break;
+
+    default:
+      break;
+  }
+
+  // The window might have been destroyed by the handlers, don't interact with
+  // *this in this function from now on.
+
+  return GDK_EVENT_PROPAGATE;
+}
+
+gboolean GTKWindow::WindowEventHandlerThunk(GtkWidget* widget, GdkEvent* event,
+                                            gpointer user_data) {
+  GTKWindow* window = reinterpret_cast<GTKWindow*>(user_data);
+  if (!window || widget != window->window_ ||
+      reinterpret_cast<const GdkEventAny*>(event)->window !=
+          gtk_widget_get_window(window->window_)) {
+    return GDK_EVENT_PROPAGATE;
+  }
+  return window->WindowEventHandler(event);
+}
+
+gboolean GTKWindow::DrawingAreaEventHandler(GdkEvent* event) {
+  switch (event->type) {
+    case GDK_MOTION_NOTIFY:
+    case GDK_BUTTON_PRESS:
+    case GDK_BUTTON_RELEASE:
+    case GDK_SCROLL: {
+      WindowDestructionReceiver destruction_receiver(this);
+      HandleMouse(event, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        break;
+      }
+    } break;
+
+    case GDK_CONFIGURE: {
+      if (batched_size_update_depth_) {
+        batched_size_update_contained_configure_ = true;
+      } else {
+        WindowDestructionReceiver destruction_receiver(this);
+        HandleSizeUpdate(destruction_receiver);
+        if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+          break;
+        }
+      }
+    } break;
+    default:
+      break;
+  }
+
+  // The window might have been destroyed by the handlers, don't interact with
+  // *this in this function from now on.
+
+  return GDK_EVENT_PROPAGATE;
+}
+
+gboolean GTKWindow::DrawingAreaEventHandlerThunk(GtkWidget* widget, GdkEvent* event,
+                                                 gpointer user_data) {
+  GTKWindow* window = reinterpret_cast<GTKWindow*>(user_data);
+  if (!window || widget != window->drawing_area_ ||
+      reinterpret_cast<const GdkEventAny*>(event)->window !=
+          gtk_widget_get_window(window->drawing_area_)) {
+    return GDK_EVENT_PROPAGATE;
+  }
+  return window->DrawingAreaEventHandler(event);
+}
+
+gboolean GTKWindow::DrawHandler(GtkWidget* widget, cairo_t* cr, gpointer user_data) {
+  GTKWindow* window = reinterpret_cast<GTKWindow*>(user_data);
+  if (!window || widget != window->drawing_area_) {
+    return FALSE;
+  }
+  if (window->batched_size_update_depth_) {
+    window->batched_size_update_contained_draw_ = true;
+  } else {
+    window->OnPaint();
+  }
+  return TRUE;
+}
+
+std::unique_ptr<ui::MenuItem> MenuItem::Create(Type type, const std::string& text,
+                                               const std::string& hotkey,
+                                               std::function<void()> callback) {
+  return std::make_unique<GTKMenuItem>(type, text, hotkey, callback);
+}
+
+void GTKMenuItem::ActivateHandler(GtkWidget* menu_item, gpointer user_data) {
+  static_cast<GTKMenuItem*>(user_data)->OnSelected();
+  // The menu item might have been destroyed by its OnSelected, don't do
+  // anything with it here from now on.
+}
+
+GTKMenuItem::GTKMenuItem(Type type, const std::string& text, const std::string& hotkey,
+                         std::function<void()> callback)
+    : MenuItem(type, text, hotkey, std::move(callback)) {
+  std::string label = text;
+  // TODO(dougvj) Would we ever need to escape underscores?
+  // Replace & with _ for gtk to see the memonic
+  std::replace(label.begin(), label.end(), '&', '_');
+  const gchar* gtk_label = reinterpret_cast<const gchar*>(label.c_str());
+  switch (type) {
+    case MenuItem::Type::kNormal:
+    default:
+      menu_ = gtk_menu_bar_new();
+      break;
+    case MenuItem::Type::kPopup:
+      menu_ = gtk_menu_item_new_with_mnemonic(gtk_label);
+      break;
+    case MenuItem::Type::kSeparator:
+      menu_ = gtk_separator_menu_item_new();
+      break;
+    case MenuItem::Type::kString:
+      auto full_name = text;
+      if (!hotkey.empty()) {
+        full_name += "\t" + hotkey;
+      }
+      menu_ = gtk_menu_item_new_with_mnemonic(gtk_label);
+      break;
+  }
+  if (menu_) {
+    // Own the object because it may be detached from and re-attached to a
+    // Window.
+    g_object_ref_sink(menu_);
+    if (GTK_IS_MENU_ITEM(menu_)) {
+      g_signal_connect(menu_, "activate", G_CALLBACK(ActivateHandler),
+                       reinterpret_cast<gpointer>(this));
+    }
+  }
+}
+
+GTKMenuItem::~GTKMenuItem() {
+  if (menu_) {
+    g_object_unref(menu_);
+  }
+}
+
+void GTKMenuItem::OnChildAdded(MenuItem* generic_child_item) {
+  auto child_item = static_cast<GTKMenuItem*>(generic_child_item);
+  GtkWidget* submenu = nullptr;
+  switch (child_item->type()) {
+    case MenuItem::Type::kNormal:
+      // Nothing special.
+      break;
+    case MenuItem::Type::kPopup:
+      if (GTK_IS_MENU_ITEM(menu_)) {
+        submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_));
+        // Get sub menu and if it doesn't exist create it
+        if (submenu == nullptr) {
+          submenu = gtk_menu_new();
+          gtk_menu_item_set_submenu(GTK_MENU_ITEM(menu_), submenu);
+        }
+        gtk_menu_shell_append(GTK_MENU_SHELL(submenu), child_item->handle());
+      } else {
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu_), child_item->handle());
+      }
+      break;
+    case MenuItem::Type::kSeparator:
+    case MenuItem::Type::kString:
+      assert(GTK_IS_MENU_ITEM(menu_));
+      // Get sub menu and if it doesn't exist create it
+      submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_));
+      if (submenu == nullptr) {
+        submenu = gtk_menu_new();
+        gtk_menu_item_set_submenu(GTK_MENU_ITEM(menu_), submenu);
+      }
+      gtk_menu_shell_append(GTK_MENU_SHELL(submenu), child_item->handle());
+      break;
+  }
+}
+
+// TODO(dougvj)
+void GTKMenuItem::OnChildRemoved(MenuItem* generic_child_item) {
+  assert_always();
+}
+
+}  // namespace ui
+
+}  // namespace rex

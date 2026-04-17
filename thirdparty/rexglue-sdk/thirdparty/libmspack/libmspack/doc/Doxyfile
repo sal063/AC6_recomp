@@ -1,0 +1,9 @@
+PROJECT_NAME           = libmspack
+INPUT                  = ../mspack/mspack.h
+
+EXTRACT_ALL            = YES
+HIDE_UNDOC_MEMBERS     = YES
+JAVADOC_AUTOBRIEF      = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+FULL_PATH_NAMES        = NO
+GENERATE_LATEX         = NO

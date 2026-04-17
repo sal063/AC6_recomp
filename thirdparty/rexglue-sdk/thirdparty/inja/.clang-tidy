@@ -1,0 +1,22 @@
+Checks: >
+  *,
+  -abseil-*,
+  -altera-*,
+  -boost-*,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -cppcoreguidelines-avoid-goto,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -fuchsia-*,
+  -hicpp-*,
+  -llvm-*,
+  -llvmlibc-*,
+  -misc-non-private-member-variables-in-classes,
+  -modernize-*,
+  -readability-function-cognitive-complexity,
+  -readability-identifier-length,
+  -readability-named-parameter
+
+# Turn all the warnings from the checks above into errors.
+HeaderFilterRegex: '.*/include/inja/.*\.hpp$'
+UseColor: true
+WarningsAsErrors: ''

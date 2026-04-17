@@ -1,0 +1,73 @@
+#!/bin/sh
+# test cabextract --lowercase and --directory options
+. test/testcase
+
+# skip test if environment has no UTF-8 locale, where
+# cabextract can't lowercase non-ASCII characters
+"$cabextract" -l    cabs/case-utf8.cab >$expected
+"$cabextract" -L -l cabs/case-utf8.cab >$actual
+if diff $expected $actual >/dev/null; then
+    exit 77
+fi
+
+"$cabextract" -l cabs/case-utf8.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-utf8.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | latin1/upper/ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞ
+         0 | 12.03.1997 11:13:52 | latin1/lower/àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ
+         0 | 12.03.1997 11:13:52 | greek/upper/ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ
+         0 | 12.03.1997 11:13:52 | greek/lower/αβγδεζηθικλμνξοπρςστυφχψ
+         0 | 12.03.1997 11:13:52 | cyrillic/upper/АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ
+         0 | 12.03.1997 11:13:52 | cyrillic/lower/абвгдежзийклмнопрстуфхцчшщъыьэюя
+
+All done, no errors.
+EOF
+
+"$cabextract"  -L -l cabs/case-utf8.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-utf8.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | latin1/upper/àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ
+         0 | 12.03.1997 11:13:52 | latin1/lower/àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ
+         0 | 12.03.1997 11:13:52 | greek/upper/αβγδεζηθικλμνξοπρστυφχψω
+         0 | 12.03.1997 11:13:52 | greek/lower/αβγδεζηθικλμνξοπρςστυφχψ
+         0 | 12.03.1997 11:13:52 | cyrillic/upper/абвгдежзийклмнопрстуфхцчшщъыьэюя
+         0 | 12.03.1997 11:13:52 | cyrillic/lower/абвгдежзийклмнопрстуфхцчшщъыьэюя
+
+All done, no errors.
+EOF
+
+"$cabextract" -d DIR/PATH -l cabs/case-utf8.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-utf8.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | DIR/PATH/latin1/upper/ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/latin1/lower/àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/greek/upper/ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/greek/lower/αβγδεζηθικλμνξοπρςστυφχψ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/cyrillic/upper/АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/cyrillic/lower/абвгдежзийклмнопрстуфхцчшщъыьэюя
+
+All done, no errors.
+EOF
+
+"$cabextract" -d DIR/PATH -L -l cabs/case-utf8.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-utf8.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | DIR/PATH/latin1/upper/àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/latin1/lower/àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/greek/upper/αβγδεζηθικλμνξοπρστυφχψω
+         0 | 12.03.1997 11:13:52 | DIR/PATH/greek/lower/αβγδεζηθικλμνξοπρςστυφχψ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/cyrillic/upper/абвгдежзийклмнопрстуфхцчшщъыьэюя
+         0 | 12.03.1997 11:13:52 | DIR/PATH/cyrillic/lower/абвгдежзийклмнопрстуфхцчшщъыьэюя
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

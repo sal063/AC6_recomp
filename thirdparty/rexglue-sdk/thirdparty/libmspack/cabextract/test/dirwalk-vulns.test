@@ -1,0 +1,43 @@
+#!/bin/sh
+# test cabextract prevents directory path manipulation
+. test/testcase
+
+"$cabextract" -l cabs/dirwalk-vulns.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/dirwalk-vulns.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | absolute/path
+         0 | 12.03.1997 11:13:52 | absolute/xx/xx/and/relative/path
+         0 | 12.03.1997 11:13:52 | absolute\path\reverse\slashes
+         0 | 12.03.1997 11:13:52 | absolute\xx\xx\and\relative\path\reverse\slashes
+         0 | 12.03.1997 11:13:52 | x
+         0 | 12.03.1997 11:13:52 | x
+         0 | 12.03.1997 11:13:52 | x
+         0 | 12.03.1997 11:13:52 | x
+         0 | 12.03.1997 11:13:52 | xx/relative/path
+         0 | 12.03.1997 11:13:52 | xx/xx/relative/path
+         0 | 12.03.1997 11:13:52 | xx/xx/xx/relative/path
+         0 | 12.03.1997 11:13:52 | relative/xx/path
+         0 | 12.03.1997 11:13:52 | relative/xx/xx/path
+         0 | 12.03.1997 11:13:52 | relative/xx/xx/xx/path
+         0 | 12.03.1997 11:13:52 | ��absolute��path2b
+         0 | 12.03.1997 11:13:52 | absolute/path3b
+         0 | 12.03.1997 11:13:52 | absolute/path4b
+         0 | 12.03.1997 11:13:52 | �����absolute�����path5b
+         0 | 12.03.1997 11:13:52 | ������absolute������path6b
+         0 | 12.03.1997 11:13:52 | relative��..��..��path2b
+         0 | 12.03.1997 11:13:52 | relative/xx/xx/path3b
+         0 | 12.03.1997 11:13:52 | relative/xx/xx/path4b
+         0 | 12.03.1997 11:13:52 | relative�����..�����..�����path5b
+         0 | 12.03.1997 11:13:52 | relative������..������..������path6b
+         0 | 12.03.1997 11:13:52 | innocuous��/xx/xx/relative/path2b
+         0 | 12.03.1997 11:13:52 | innocuous�/xx/xx/relative/path3b
+         0 | 12.03.1997 11:13:52 | innocuous�/xx/xx/relative/path4b
+         0 | 12.03.1997 11:13:52 | innocuous�����/xx/xx/relative/path5b
+         0 | 12.03.1997 11:13:52 | innocuous������/xx/xx/relative/path6b
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

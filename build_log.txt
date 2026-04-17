@@ -1,0 +1,50 @@
+[build] Running: cmake --build --preset win-amd64-release
+[build] FAILED (rc=1) in 9.3s
+[build] Last 40 lines of output:
+        |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5205:7: error: use of undeclared identifier 'direct_display_texture_state_'
+   5205 |   if (direct_display_texture_state_ != D3D12_RESOURCE_STATE_COPY_DEST) {
+        |       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5206:27: error: use of undeclared identifier 'direct_display_texture_'
+   5206 |     PushTransitionBarrier(direct_display_texture_.Get(), direct_display_texture_state_, D3D12_RESOURCE_STATE_COPY_DEST);
+        |                           ^~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5206:58: error: use of undeclared identifier 'direct_display_texture_state_'
+   5206 |     PushTransitionBarrier(direct_display_texture_.Get(), direct_display_texture_state_, D3D12_RESOURCE_STATE_COPY_DEST);
+        |                                                          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5207:5: error: use of undeclared identifier 'direct_display_texture_state_'
+   5207 |     direct_display_texture_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
+        |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5236:27: error: use of undeclared identifier 'direct_display_texture_'
+   5236 |       dst_loc.pResource = direct_display_texture_.Get();
+        |                           ^~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5256:25: error: use of undeclared identifier 'direct_display_texture_'
+   5256 |   PushTransitionBarrier(direct_display_texture_.Get(), direct_display_texture_state_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        |                         ^~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5256:56: error: use of undeclared identifier 'direct_display_texture_state_'
+   5256 |   PushTransitionBarrier(direct_display_texture_.Get(), direct_display_texture_state_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        |                                                        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5257:3: error: use of undeclared identifier 'direct_display_texture_state_'
+   5257 |   direct_display_texture_state_ = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        |   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  C:/AC6Recomp_ext/thirdparty/rexglue-sdk/src/graphics/d3d12/command_processor.cpp:5274:10: error: use of undeclared identifier 'direct_display_texture_'
+   5274 |   return direct_display_texture_.Get();
+        |          ^~~~~~~~~~~~~~~~~~~~~~~
+  15 errors generated.
+  [7/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.3.cpp.obj
+  [8/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.2.cpp.obj
+  [9/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.4.cpp.obj
+  [10/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.1.cpp.obj
+  [11/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.5.cpp.obj
+  [12/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.6.cpp.obj
+  [13/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.0.cpp.obj
+  [14/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.7.cpp.obj
+  [15/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.9.cpp.obj
+  [16/48] Building CXX object CMakeFiles/ac6recomp.dir/generated/ac6recomp_recomp.8.cpp.obj
+  ninja: build stopped: subcommand failed.
+
+--- BUILD FAILED ---
+{
+  "score": -1,
+  "description": "build failed",
+  "build_ok": false
+}

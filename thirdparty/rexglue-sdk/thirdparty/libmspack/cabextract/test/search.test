@@ -1,0 +1,69 @@
+#!/bin/sh
+# test cabextract can find cabinets within files
+. test/testcase
+
+"$cabextract" -l cabs/search.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/search.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+        84 | 18.07.2018 15:30:04 | hello.cab
+        84 | 18.07.2018 15:30:04 | there.cab
+        88 | 18.07.2018 15:30:04 | general.cab
+        86 | 18.07.2018 15:30:04 | kenobi.cab
+         6 | 18.07.2018 15:30:04 | hello.txt
+         6 | 18.07.2018 15:30:04 | there.txt
+         8 | 18.07.2018 15:30:04 | general.txt
+         7 | 18.07.2018 15:30:04 | kenobi.txt
+        84 | 18.07.2018 15:30:04 | hello.cab
+         6 | 18.07.2018 15:30:04 | hello.txt
+        84 | 18.07.2018 15:30:04 | hello.cab
+         6 | 18.07.2018 15:30:04 | hello.txt
+        84 | 18.07.2018 15:30:04 | there.cab
+         6 | 18.07.2018 15:30:04 | there.txt
+        84 | 18.07.2018 15:30:04 | there.cab
+         6 | 18.07.2018 15:30:04 | there.txt
+        88 | 18.07.2018 15:30:04 | general.cab
+         8 | 18.07.2018 15:30:04 | general.txt
+        88 | 18.07.2018 15:30:04 | general.cab
+         8 | 18.07.2018 15:30:04 | general.txt
+        86 | 18.07.2018 15:30:04 | kenobi.cab
+         7 | 18.07.2018 15:30:04 | kenobi.txt
+        86 | 18.07.2018 15:30:04 | kenobi.cab
+         7 | 18.07.2018 15:30:04 | kenobi.txt
+
+All done, no errors.
+EOF
+
+"$cabextract" -t cabs/search.cab >$actual
+compare_with <<'EOF'
+Testing cabinet: cabs/search.cab
+  hello.cab  OK                                cabef68e0ded744846e41c05823a690c
+  there.cab  OK                                82bfb679efc9d382ba315b3a2d459f0d
+  general.cab  OK                              05d8826f088e942db74b03af56e6ffa9
+  kenobi.cab  OK                               a83c633a08b9e6ef2343f4862ba2dabb
+  hello.txt  OK                                b1946ac92492d2347c6235b4d2611184
+  there.txt  OK                                c4ff45bb1fab99f9164b7fec14b2292a
+  general.txt  OK                              7ba5a8d2df7be8121b694c5c00d0919a
+  kenobi.txt  OK                               dd7f34d60a52ab6d8926eadc28b87042
+  hello.cab  OK                                cabef68e0ded744846e41c05823a690c
+  hello.txt  OK                                b1946ac92492d2347c6235b4d2611184
+  hello.cab  OK                                cabef68e0ded744846e41c05823a690c
+  hello.txt  OK                                b1946ac92492d2347c6235b4d2611184
+  there.cab  OK                                82bfb679efc9d382ba315b3a2d459f0d
+  there.txt  OK                                c4ff45bb1fab99f9164b7fec14b2292a
+  there.cab  OK                                82bfb679efc9d382ba315b3a2d459f0d
+  there.txt  OK                                c4ff45bb1fab99f9164b7fec14b2292a
+  general.cab  OK                              05d8826f088e942db74b03af56e6ffa9
+  general.txt  OK                              7ba5a8d2df7be8121b694c5c00d0919a
+  general.cab  OK                              05d8826f088e942db74b03af56e6ffa9
+  general.txt  OK                              7ba5a8d2df7be8121b694c5c00d0919a
+  kenobi.cab  OK                               a83c633a08b9e6ef2343f4862ba2dabb
+  kenobi.txt  OK                               dd7f34d60a52ab6d8926eadc28b87042
+  kenobi.cab  OK                               a83c633a08b9e6ef2343f4862ba2dabb
+  kenobi.txt  OK                               dd7f34d60a52ab6d8926eadc28b87042
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

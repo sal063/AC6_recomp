@@ -1,0 +1,49 @@
+#!/bin/sh
+# test cabextract --lowercase and --directory options
+. test/testcase
+
+"$cabextract" -l cabs/case-ascii.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-ascii.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | ascii/upper/ABCDEFGHIJKLMNOPQRSTUVWXYZ
+         0 | 12.03.1997 11:13:52 | ascii/lower/abcdefghijklmnopqrstuvwxyz
+
+All done, no errors.
+EOF
+
+"$cabextract"  -L -l cabs/case-ascii.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-ascii.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | ascii/upper/abcdefghijklmnopqrstuvwxyz
+         0 | 12.03.1997 11:13:52 | ascii/lower/abcdefghijklmnopqrstuvwxyz
+
+All done, no errors.
+EOF
+
+"$cabextract" -d DIR/PATH -l cabs/case-ascii.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-ascii.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | DIR/PATH/ascii/upper/ABCDEFGHIJKLMNOPQRSTUVWXYZ
+         0 | 12.03.1997 11:13:52 | DIR/PATH/ascii/lower/abcdefghijklmnopqrstuvwxyz
+
+All done, no errors.
+EOF
+
+"$cabextract" -d DIR/PATH -L -l cabs/case-ascii.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: cabs/case-ascii.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+         0 | 12.03.1997 11:13:52 | DIR/PATH/ascii/upper/abcdefghijklmnopqrstuvwxyz
+         0 | 12.03.1997 11:13:52 | DIR/PATH/ascii/lower/abcdefghijklmnopqrstuvwxyz
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

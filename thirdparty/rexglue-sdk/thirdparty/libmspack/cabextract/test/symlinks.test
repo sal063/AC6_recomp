@@ -1,0 +1,56 @@
+#!/bin/sh
+# - test that cabextract doesn't follow symlinks when extracting files
+#  (default behaviour) but does when given the -k option
+# - also check that it doesn't delete symlinks in the path supplied by the
+#   user (-d option)
+# - also check that the -n option stops overwriting files
+. test/testcase
+
+set -e # every command is a test!
+
+# set up a symlinked file and symlinked directory
+# extract $tmpdir/plain.c and $tmpdir/1/2/3/4.c
+# check they did NOT get written to $tmpdir/other.c and $tmpdir/other/4.c
+touch $tmpdir/other.c
+mkdir $tmpdir/1 $tmpdir/1/2 $tmpdir/other
+ln -s $tmpdir/other.c $tmpdir/plain.c
+ln -s $tmpdir/other $tmpdir/1/2/3
+"$cabextract" -q -d $tmpdir cabs/dir.cab
+[ -s $tmpdir/plain.c -a \! -s $tmpdir/other.c ]
+[ -s $tmpdir/1/2/3/4.c -a \! -s $tmpdir/other/4.c ]
+
+# restore the symlinked file/dir
+# extract again with -k option
+# check they DID get written to $tmpdir/other.c and $tmpdir/other/3/4.c
+rm -rf $tmpdir/1/2/3 $tmpdir/plain.c
+ln -s $tmpdir/other.c $tmpdir/plain.c
+ln -s $tmpdir/other $tmpdir/1/2/3
+"$cabextract" -q -k -d $tmpdir cabs/dir.cab
+[ -s $tmpdir/other.c -a -h $tmpdir/plain.c ]
+[ -s $tmpdir/other/4.c -a -h $tmpdir/1/2/3 ]
+
+# extract to a user-selected directory path that has symlinks in it.
+# check that those symlinks are preserved, but symlinks in the parts
+# of the path that are archive-controlled are removed
+rm -rf $tmpdir/1 $tmpdir/other/4.c $tmpdir/other.c $tmpdir/plain.c
+find $tmpdir -ls
+touch $tmpdir/other.c
+mkdir $tmpdir/real
+ln -s $tmpdir/real $tmpdir/fake
+mkdir $tmpdir/fake/dest $tmpdir/fake/dest/1 $tmpdir/fake/dest/1/2
+ln -s $tmpdir/other $tmpdir/fake/dest/1/2/3
+ln -s $tmpdir/other.c $tmpdir/plain.c
+"$cabextract" -q -d $tmpdir/fake/dest cabs/dir.cab
+[ -s $tmpdir/fake/dest/plain.c -a \! -s $tmpdir/other.c ]
+[ -s $tmpdir/fake/dest/1/2/3/4.c -a \! -s $tmpdir/other/3/4.c ]
+[ -h $tmpdir/fake -a -d $tmpdir/fake/dest ]
+
+# check that -n option works
+echo hello > $tmpdir/fake/dest/plain.c
+echo world > $tmpdir/fake/dest/1/2/3/4.c
+"$cabextract" -q -n -d $tmpdir/fake/dest cabs/dir.cab
+read H < $tmpdir/fake/dest/plain.c
+read W < $tmpdir/fake/dest/1/2/3/4.c
+[ "$H" = "hello" -a "$W" = "world" ]
+
+exit 0

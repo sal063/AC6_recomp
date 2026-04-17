@@ -1,0 +1,118 @@
+# from Markus Kuhn's UTF-8 decoder capability and stress test
+# https://www.cl.cam.ac.uk/~mgk25/ucs/examples/UTF-8-test.txt
+
+# 1. The Greek word 'kosme'
+Îºá½¹ÏƒÎ¼Îµ
+
+# 2  Boundary condition test cases
+# 2.1  First possible sequence of a certain length
+Â€
+à €
+ğ€€
+øˆ€€€
+ü„€€€€
+# 2.2  Last possible sequence of a certain length
+
+ß¿
+ï¿¿
+÷¿¿¿
+û¿¿¿¿
+ı¿¿¿¿¿
+# 2.3  Other boundary conditions
+íŸ¿
+î€€
+ï¿½
+ô¿¿
+ô€€
+
+# 3 Malformed sequences
+# 3.1  Unexpected continuation bytes
+€
+¿
+€¿
+€¿€
+€¿€¿
+€¿€¿€
+€¿€¿€¿
+€¿€¿€¿€
+
+# 3.1.9  Sequence of all 64 possible continuation bytes (0x80-0xbf):
+€‚ƒ„…†‡ˆ‰Š‹Œ‘’“”•–—˜™š›œŸ ¡¢£¤¥¦§¨©ª«¬­®¯
+
+# 3.2  Lonely start characters
+# 3.2.1  All 32 first bytes of 2-byte sequences (0xc0-0xdf), each followed by a space character:
+À Á Â Ã Ä Å Æ Ç È É Ê Ë Ì Í Î Ï
+# 3.2.2  All 16 first bytes of 3-byte sequences (0xe0-0xef), each followed by a space character:
+à á â ã ä å æ ç è é ê ë ì í î ï 
+# 3.2.3  All 8 first bytes of 4-byte sequences (0xf0-0xf7), each followed by a space character:
+ğ ñ ò ó ô õ ö ÷ 
+# 3.2.4  All 4 first bytes of 5-byte sequences (0xf8-0xfb), each followed by a space character:
+ø ù ú û 
+# 3.2.5  All 2 first bytes of 6-byte sequences (0xfc-0xfd), each followed by a space character: 
+ü ı 
+
+# 3.3  Sequences with last continuation byte missing
+À
+à€
+ğ€€
+ø€€€
+ü€€€€
+ß
+ï¿
+÷¿¿
+û¿¿¿
+ı¿¿¿¿
+
+# 3.4  Concatenation of incomplete sequences
+Àà€ğ€€ø€€€ü€€€€ßï¿÷¿¿û¿¿¿ı¿¿¿¿
+
+# 3.5  Impossible bytes
+ş
+ÿ
+şşÿÿ
+
+# 4  Overlong sequences
+# 4.1  Examples of an overlong ASCII character
+À¯
+à€¯
+ğ€€¯
+ø€€€¯
+ü€€€€¯
+# 4.2  Maximum overlong sequences
+Á¿
+àŸ¿
+ğ¿¿
+ø‡¿¿¿
+üƒ¿¿¿¿
+# 4.3  Overlong representation of the NUL character
+À€
+à€€
+ğ€€€
+ø€€€€
+ü€€€€€
+
+# 5  Illegal code positions
+# 5.1 Single UTF-16 surrogates
+í €
+í­¿
+í®€
+í¯¿
+í°€
+í¾€
+í¿¿
+# 5.2 Paired UTF-16 surrogates
+í €í°€
+í €í¿¿
+í­¿í°€
+í­¿í¿¿
+í®€í°€
+í®€í¿¿
+í¯¿í°€
+í¯¿í¿¿
+# 5.3 Noncharacter code positions
+ï¿¾
+ï¿¿
+# Other noncharacters:
+ï·ï·‘ï·’ï·“ï·”ï·•ï·–ï·—ï·˜ï·™ï·šï·›ï·œï·ï·ï·Ÿï· ï·¡ï·¢ï·£ï·¤ï·¥ï·¦ï·§ï·¨ï·©ï·ªï·«ï·¬ï·­ï·®ï·¯"|
+# 5.3.4  U+nFFFE U+nFFFF (for n = 1..10)
+ğŸ¿¾ğŸ¿¿ğ¯¿¾ğ¯¿¿ğ¿¿¾ğ¿¿¿ñ¿¾ñ¿¿ñŸ¿¾ñŸ¿¿ñ¯¿¾ñ¯¿¿ñ¿¿¾ñ¿¿¿ò¿¾ò¿¿

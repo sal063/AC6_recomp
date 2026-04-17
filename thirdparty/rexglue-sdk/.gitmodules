@@ -1,0 +1,65 @@
+[submodule "thirdparty/libmspack"]
+	path = thirdparty/libmspack
+	url = https://github.com/kyz/libmspack.git
+[submodule "thirdparty/glslang"]
+	path = thirdparty/glslang
+	url = https://github.com/KhronosGroup/glslang.git
+[submodule "thirdparty/FFmpeg"]
+	path = thirdparty/FFmpeg
+	url = https://github.com/wmarti/FFmpeg.git
+	branch = xenia-ffmpeg-canary-full
+[submodule "thirdparty/tomlplusplus"]
+	path = thirdparty/tomlplusplus
+	url = https://github.com/marzer/tomlplusplus.git
+[submodule "thirdparty/simde"]
+	path = thirdparty/simde
+	url = https://github.com/simd-everywhere/simde.git
+[submodule "thirdparty/xxHash"]
+	path = thirdparty/xxHash
+	url = https://github.com/Cyan4973/xxHash.git
+[submodule "thirdparty/spdlog"]
+	path = thirdparty/spdlog
+	url = https://github.com/gabime/spdlog.git
+[submodule "thirdparty/fmt"]
+	path = thirdparty/fmt
+	url = https://github.com/fmtlib/fmt.git
+[submodule "thirdparty/catch2"]
+	path = thirdparty/catch2
+	url = https://github.com/catchorg/Catch2.git
+[submodule "thirdparty/snappy"]
+	path = thirdparty/snappy
+	url = https://github.com/google/snappy.git
+[submodule "thirdparty/utfcpp"]
+	path = thirdparty/utfcpp
+	url = https://github.com/nemtrif/utfcpp.git
+[submodule "thirdparty/volk"]
+	path = thirdparty/volk
+	url = https://github.com/zeux/volk.git
+[submodule "thirdparty/vulkan-headers"]
+	path = thirdparty/vulkan-headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+[submodule "thirdparty/vulkan-memory-allocator"]
+	path = thirdparty/vulkan-memory-allocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "thirdparty/imgui"]
+	path = thirdparty/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "thirdparty/spirv-tools"]
+	path = thirdparty/spirv-tools
+	url = https://github.com/KhronosGroup/SPIRV-Tools.git
+[submodule "thirdparty/spirv-headers"]
+	path = thirdparty/spirv-headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers.git
+[submodule "thirdparty/cli11"]
+	path = thirdparty/cli11
+	url = https://github.com/CLIUtils/CLI11
+[submodule "thirdparty/o1heap"]
+	path = thirdparty/o1heap
+	url = https://github.com/pavel-kirienko/o1heap.git
+[submodule "thirdparty/sdl3"]
+	path = thirdparty/sdl3
+	url = https://github.com/libsdl-org/SDL
+	branch = release-3.4.x
+[submodule "thirdparty/inja"]
+	path = thirdparty/inja
+	url = https://github.com/pantor/inja.git

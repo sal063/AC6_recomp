@@ -1,0 +1,52 @@
+name: Main Workflow
+on: [push, pull_request]
+env:
+  LLVM_VERSION: 19
+jobs:
+  test:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [clang, gcc]
+        build_type: [Debug, Release, MinSizeRel]
+        include:
+          - toolchain: gcc
+            c-compiler: gcc
+            cxx-compiler: g++
+          - toolchain: clang
+            c-compiler: clang
+            cxx-compiler: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh $LLVM_VERSION
+          sudo apt update -y && sudo apt upgrade -y
+          sudo apt-get -y install gcc-multilib g++-multilib clang-tidy-$LLVM_VERSION
+          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-$LLVM_VERSION 50
+          clang-tidy --version
+      - run: >
+          cmake
+          -B ${{ github.workspace }}/build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
+          .
+      - working-directory: ${{github.workspace}}/build
+        run: make VERBOSE=1 -j$(nproc)
+      - working-directory: ${{github.workspace}}/build
+        run: make test
+
+  style_check:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DoozyX/clang-format-lint-action@v0.20
+        with:
+          source: './o1heap ./tests'
+          exclude: './tests/catch'
+          extensions: 'c,h,cpp,hpp'
+          clangFormatVersion: ${{ env.LLVM_VERSION }}

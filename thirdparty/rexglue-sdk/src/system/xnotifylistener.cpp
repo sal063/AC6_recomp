@@ -1,0 +1,80 @@
+/**
+ * ReXGlue runtime - AC6 Recompilation project
+ * Copyright (c) 2026 Tom Clay. All rights reserved.
+ */
+
+#include <rex/assert.h>
+#include <rex/logging.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xnotifylistener.h>
+
+namespace rex::system {
+
+XNotifyListener::XNotifyListener(KernelState* kernel_state) : XObject(kernel_state, kObjectType) {}
+
+XNotifyListener::~XNotifyListener() {}
+
+void XNotifyListener::Initialize(uint64_t mask, uint32_t max_version) {
+  assert_false(wait_handle_);
+
+  wait_handle_ = rex::thread::Event::CreateManualResetEvent(false);
+  assert_not_null(wait_handle_);
+  mask_ = mask;
+  max_version_ = max_version;
+
+  kernel_state_->RegisterNotifyListener(this);
+}
+
+void XNotifyListener::EnqueueNotification(XNotificationID id, uint32_t data) {
+  auto key = XNotificationKey(id);
+  // Ignore if the notification doesn't match our mask.
+  if ((mask_ & uint64_t(1ULL << key.mask_index)) == 0) {
+    return;
+  }
+  // Ignore if the notification is too new.
+  if (key.version > max_version_) {
+    return;
+  }
+  auto global_lock = global_critical_region_.Acquire();
+  notifications_.push_back(std::pair<XNotificationID, uint32_t>(id, data));
+  wait_handle_->Set();
+}
+
+bool XNotifyListener::DequeueNotification(XNotificationID* out_id, uint32_t* out_data) {
+  auto global_lock = global_critical_region_.Acquire();
+  bool dequeued = false;
+  if (notifications_.size()) {
+    dequeued = true;
+    auto it = notifications_.begin();
+    *out_id = it->first;
+    *out_data = it->second;
+    notifications_.erase(it);
+    if (!notifications_.size()) {
+      wait_handle_->Reset();
+    }
+  }
+  return dequeued;
+}
+
+bool XNotifyListener::DequeueNotification(XNotificationID id, uint32_t* out_data) {
+  auto global_lock = global_critical_region_.Acquire();
+  if (!notifications_.size()) {
+    return false;
+  }
+  bool dequeued = false;
+  for (auto it = notifications_.begin(); it != notifications_.end(); ++it) {
+    if (it->first != id) {
+      continue;
+    }
+    dequeued = true;
+    *out_data = it->second;
+    notifications_.erase(it);
+    if (!notifications_.size()) {
+      wait_handle_->Reset();
+    }
+    break;
+  }
+  return dequeued;
+}
+
+}  // namespace rex::system

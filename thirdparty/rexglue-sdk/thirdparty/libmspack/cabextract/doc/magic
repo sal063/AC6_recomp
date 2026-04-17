@@ -1,0 +1,36 @@
+#------------------------------------------------------------------------------
+# Microsoft Cabinet files
+#
+# From <kyzer@cabextract.org.uk> (part of cabextract package)
+0       string          MSCF\0\0\0\0    Microsoft Cabinet file
+>8      lelong          x               \b, %u bytes
+>28     leshort         1               \b, 1 file
+>28     leshort         >1              \b, %u files
+
+#------------------------------------------------------------------------------
+# InstallShield Cabinet files
+#
+# From <kyzer@cabextract.org.uk> (part of cabextract package)
+0       string          ISc(            InstallShield Cabinet file
+>5      byte&0xf0       =0x60           version 6,
+>5      byte&0xf0       !0x60           version 4/5,
+>(12.l+40)      lelong  x               %u files
+
+#------------------------------------------------------------------------------
+# Windows CE package files
+#
+# From <kyzer@cabextract.org.uk> (part of cabextract package)
+0       string          MSCE\0\0\0\0    Microsoft WinCE install header
+>20     lelong          0               \b, architecture-independent
+>20     lelong          103             \b, Hitachi SH3
+>20     lelong          104             \b, Hitachi SH4
+>20     lelong          0xA11           \b, StrongARM
+>20     lelong          4000            \b, MIPS R4000
+>20     lelong          10003           \b, Hitachi SH3
+>20     lelong          10004           \b, Hitachi SH3E
+>20     lelong          10005           \b, Hitachi SH4
+>20     lelong          70001           \b, ARM 7TDMI
+>52     leshort         1               \b, 1 file
+>52     leshort         >1              \b, %u files
+>56     leshort         1               \b, 1 registry entry
+>56     leshort         >1              \b, %u registry entries

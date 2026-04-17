@@ -1,0 +1,6 @@
+These cabinet files cause old versions of cabextract to crash,
+loop forever, or read outwith allocated memory.
+
+The current version of cabextract should no longer do that,
+however it will reject or fail to unpack most of these files
+because they are invalid.

@@ -1,0 +1,90 @@
+#!/usr/bin/perl -w
+# cabsplit splits a cabinet into one cabinet per folder.
+# Mostly useful for debugging.
+use strict;
+
+die "Usage: $0 <cab file(s)>\n" unless @ARGV;
+for my $file (@ARGV) {
+    if (open FH, "<$file") {
+        my $err = split_cabinet($file);
+        print "$file: $err\n" if $err;
+        close FH;
+    }
+    else {
+        warn "$file: $!\n";
+    }
+}
+
+sub split_cabinet {
+    my $fname = $_[0];
+    my $buf;
+    
+    read FH, $buf, 36;
+    my @hdr = unpack 'V6C2v5', $buf;
+    return "not a cab file" unless $hdr[0] == 0x4643534D;
+    my $num_folders = $hdr[8];
+    my $num_files   = $hdr[9];
+
+    my ($folder_resv, $block_resv) = (0, 0);
+    if ($hdr[10] & 0x0004) {
+        read FH, $buf, 4;
+        my @hdr_resv = unpack 'vCC', $buf;
+        seek FH, $hdr_resv[0], 1;
+        $folder_resv = $hdr_resv[1];
+        $block_resv  = $hdr_resv[2];
+    }
+    read_string(), read_string() if $hdr[10] & 0x0001;
+    read_string(), read_string() if $hdr[10] & 0x0002;
+
+    # read folders
+    my @folders = map { read FH, $_, 8; seek FH, $folder_resv, 1; $_ } 1 .. $num_folders;
+
+    # read files
+    my @files;
+    for (1 .. $num_files) {
+        read FH, $buf, 16;
+        my @file = unpack 'V2v4', $buf;
+        my $fname = read_string();
+        my $folder = $file[2];
+        if ($folder == 0xFFFD || $folder == 0xFFFF) { $folder = 0 }
+        elsif ($folder == 0xFFFE) { $folder = $num_folders-1 };
+        $file[2] = 0;
+        push @{$files[$folder]}, pack 'V2v4Z*', @file, $fname;
+    }
+
+    for my $i (0 .. $#folders) {
+        my ($offset, $cnt) = unpack 'Vv', $folders[$i];
+        seek FH, $offset, 0;
+        my $blocks = join '', map {
+            read FH, $buf, 8;
+            my $csize = (unpack 'Vvv', $buf)[1];
+            seek FH, $block_resv, 1;
+            read FH, $_, $csize;
+            $buf . $_;
+        } 1 .. $cnt;
+
+        my $files = join '', @{$files[$i]};
+
+        $hdr[2] = 36 + 8 + length($files) + length($blocks); # cab length
+        $hdr[4] = 36 + 8; # files offset
+        $hdr[8] = 1; # number of folders
+        $hdr[9] = @{$files[$i]}; # number of files
+        $hdr[10] = 0; # flags
+        substr($folders[$i], 0, 4, pack('V', 36 + 8 + length($files)));
+
+        my $outname = sprintf "%s.%03d", $fname, $i+1;
+        return "can't create $outname: $!" unless open OUT, ">$outname";
+        print OUT pack('V6C2v5', @hdr) . $folders[$i] . $files . $blocks;
+        close OUT;
+    }
+
+    return 0;
+}
+
+sub read_string {
+    my $pos = tell FH;
+    my $buf; read FH, $buf, 256;
+    my ($string) = unpack 'Z*', $buf;
+    seek FH, $pos + length($string) + 1, 0;
+    return $string;
+}

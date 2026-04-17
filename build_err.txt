@@ -1,0 +1,16 @@
+[0/2] Re-checking globbed directories...
+[1/2] Re-running CMake...
+CMake Error at CMakeLists.txt:12 (include):
+  include could not find requested file:
+
+    generated/rexglue.cmake
+
+
+CMake Error at CMakeLists.txt:27 (rexglue_setup_target):
+  Unknown CMake command "rexglue_setup_target".
+
+
+-- Configuring incomplete, errors occurred!
+FAILED: [code=1] build.ninja C:/AC6Recomp_ext/out/build/win-amd64-release/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/xxHash/cmake_unofficial/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/disasm/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/fmt/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/spdlog/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/snappy/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/utfcpp/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/thirdparty/sdl3/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/core/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/filesystem/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/ui/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/input/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/audio/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/graphics/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/system/cmake_ninja: error: rebuilding 'build.ninja': subcommand failed
+install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/kernel/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/codegen/cmake_install.cmake C:/AC6Recomp_ext/out/build/win-amd64-release/rexglue-sdk/src/rexglue/cmake_install.cmake 
+"C:\Program Files\CMake\bin\cmake.exe" --regenerate-during-build -SC:\AC6Recomp_ext -BC:\AC6Recomp_ext\out\build\win-amd64-release

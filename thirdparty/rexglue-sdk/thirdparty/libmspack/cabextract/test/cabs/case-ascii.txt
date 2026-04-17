@@ -1,0 +1,3 @@
+# test that cabextract can lowercase ASCII filenames
+ascii\upper\ABCDEFGHIJKLMNOPQRSTUVWXYZ
+ascii\lower\abcdefghijklmnopqrstuvwxyz

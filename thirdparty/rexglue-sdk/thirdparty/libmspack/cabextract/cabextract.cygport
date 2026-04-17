@@ -1,0 +1,11 @@
+NAME=cabextract
+VERSION=1.11
+RELEASE=1
+SUMMARY="Extract Microsoft cabinet (.CAB) files"
+DESCRIPTION="Extract Microsoft cabinet (.CAB) files"
+CATEGORY=Archive
+HOMEPAGE="https://www.cabextract.org.uk/"
+SRC_URI="https://www.cabextract.org.uk/${P}.tar.gz"
+LICENSE="GPL-3.0-or-later"
+DEPEND="libmspack0 libiconv2 libiconv-devel gettext-devel libiconv-devel libmspack-devel"
+CYGCONF_ARGS="--with-external-libmspack"

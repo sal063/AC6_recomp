@@ -1,0 +1,32 @@
+@PACKAGE_INIT@
+
+# SDK share directory (entry point sources, etc.)
+set(REXGLUE_SHARE_DIR "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_DATADIR@/rexglue")
+
+include(CMakeFindDependencyMacro)
+
+# Helper functions for consumer projects
+include("${CMAKE_CURRENT_LIST_DIR}/rexglue_helpers.cmake")
+
+# Ensure bundled dependencies are found from the SDK install prefix
+list(PREPEND CMAKE_PREFIX_PATH "${PACKAGE_PREFIX_DIR}")
+
+# Required dependencies
+find_dependency(fmt CONFIG)
+find_dependency(spdlog CONFIG)
+find_dependency(Snappy CONFIG)
+find_dependency(utf8cpp CONFIG)
+find_dependency(SDL3 CONFIG)
+
+# Vulkan dependencies
+set(REXGLUE_USE_VULKAN @REXGLUE_USE_VULKAN@)
+if(REXGLUE_USE_VULKAN)
+    find_dependency(VulkanHeaders CONFIG)
+    find_dependency(volk CONFIG)
+    find_dependency(VulkanMemoryAllocator CONFIG)
+endif()
+
+# Include the generated targets
+include("${CMAKE_CURRENT_LIST_DIR}/rexglueTargets.cmake")
+
+check_required_components(rexglue)

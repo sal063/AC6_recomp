@@ -1,0 +1,48 @@
+#!/bin/sh
+# test cabextract's largefile support. this doesn't run by default,
+# because it takes a long time and needs 12GB of temporary space
+. test/testcase
+
+# extract large-files.cab
+"$cabextract" -q -d $tmpdir cabs/large-files-cab.cab
+
+# generate large-search.cab
+( echo 'first spacer';  perl cabs/large-cab.pl 1 1; \
+  echo 'second spacer'; perl cabs/large-cab.pl 65535 65505; cat cabs/simple.cab; \
+  echo 'third spacer';  perl cabs/large-cab.pl 65535 65505; cat cabs/simple.cab; \
+  echo 'fourth spacer'; cat cabs/simple.cab ) > $tmpdir/large-search.cab
+
+cd $tmpdir
+
+"$cabextract" -t large-files.cab >$actual
+compare_with <<'EOF'
+Testing cabinet: large-files.cab
+  mszip-2gb.txt  OK                            d64bf04a56027b97ac17d751aba2d291
+  lzx15-2gb.txt  OK                            d64bf04a56027b97ac17d751aba2d291
+  lzx21-2gb.txt  OK                            d64bf04a56027b97ac17d751aba2d291
+
+All done, no errors.
+EOF
+
+"$cabextract" -l large-search.cab >$actual
+compare_with <<'EOF'
+Viewing cabinet: large-search.cab
+ File size | Date       Time     | Name
+-----------+---------------------+-------------
+     32768 | 12.03.1997 11:13:52 | test1.bin
+     32768 | 12.03.1997 11:13:52 | test2.bin
+2147450880 | 12.03.1997 11:13:52 | test1.bin
+2146467840 | 12.03.1997 11:13:52 | test2.bin
+        77 | 12.03.1997 11:13:52 | hello.c
+        74 | 12.03.1997 11:15:14 | welcome.c
+2147450880 | 12.03.1997 11:13:52 | test1.bin
+2146467840 | 12.03.1997 11:13:52 | test2.bin
+        77 | 12.03.1997 11:13:52 | hello.c
+        74 | 12.03.1997 11:15:14 | welcome.c
+        77 | 12.03.1997 11:13:52 | hello.c
+        74 | 12.03.1997 11:15:14 | welcome.c
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

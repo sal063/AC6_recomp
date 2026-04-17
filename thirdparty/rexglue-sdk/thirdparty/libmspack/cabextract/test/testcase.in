@@ -1,0 +1,22 @@
+cabextract="@abs_top_builddir@/cabextract@EXEEXT@"
+cd "@abs_srcdir@"
+
+tmpdir=`mktemp -d`
+status=$tmpdir/status
+expected=$status.expected
+actual=$status.actual
+echo success >$status || exit 1
+
+trap cleanup 0 1 2
+cleanup() {
+    rm -rf $tmpdir
+}
+
+compare_with() {
+    cat >$expected
+    if diff -u $expected $actual; then
+        :
+    else
+        echo failed >$status
+    fi
+}

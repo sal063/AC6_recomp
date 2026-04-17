@@ -1,0 +1,20 @@
+[binaries]
+c = 'clang-11'
+cpp = 'clang++-11'
+ar = 'llvm-ar-11'
+strip = 'llvm-strip-11'
+objcopy = 'llvm-objcopy-11'
+ld = 'llvm-ld-11'
+exe_wrapper = ['qemu-mips64el-static', '-L', '/usr/mips64el-linux-gnuabi64']
+
+[properties]
+c_args = ['--target=mips64el-linux-gnuabi64', '-march=mips64r5', '-mmsa', '-isystem=/usr/mips64el-linux-gnuabi64/include', '-Weverything', '-fno-lax-vector-conversions', '-Werror']
+cpp_args = ['--target=mips64el-linux-gnuabi64', '-march=mips64r5', '-mmsa', '-isystem=/usr/mips64el-linux-gnuabi64/include', '-Weverything', '-fno-lax-vector-conversions', '-Werror']
+c_link_args = ['--target=mips64el-linux-gnuabi64']
+cpp_link_args = ['--target=mips64el-linux-gnuabi64']
+
+[host_machine]
+system = 'linux'
+cpu_family = 'mips64el'
+cpu = 'mips64el'
+endian = 'little'

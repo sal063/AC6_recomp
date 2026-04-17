@@ -1,0 +1,199 @@
+#!/usr/bin/perl -w
+# wince_rename
+# - when run in a directory containing files extracted from
+#   a Windows CE installation cabinet, it will rename all files
+#   to their "installed" filenames, including path
+# - the header file (*.000) will be renamed to header.bin
+# - the setup DLL (*.999) will be renamed to setup.dll
+# - a REGEDIT4 style file will be made, called setup.reg
+use strict;
+use File::Basename qw(dirname);
+use File::Copy qw(move);
+use File::Path qw(make_path);
+use File::Spec;
+use File::Spec::Win32;
+
+my @ce = (
+  undef,
+  '\Program Files',
+  '\Windows',
+  '\Windows\Desktop',
+  '\Windows\StartUp',
+  '\My Documents',
+  '\Program Files\Accessories',
+  '\Program Files\Communications',
+  '\Program Files\Games',
+  '\Program Files\Pocket Outlook',
+  '\Program Files\Office',
+  '\Windows\Programs',
+  '\Windows\Programs\Accessories',
+  '\Windows\Programs\Communications',
+  '\Windows\Programs\Games',
+  '\Windows\Fonts',
+  '\Windows\Recent',
+  '\Windows\Favorites'
+);
+
+# expands a decimal number from 0-999 into a filename with a three digit
+# decimal number as a file extension, if one exists. Otherwise, undef is
+# is returned.
+sub get_fname {
+  my $pattern = sprintf '*.%03d', $_[0];
+  my @files = glob $pattern;
+  if (@files > 1) {
+    warn "WARNING: more than one '$pattern' file, using '$files[0]'\n";
+  }
+  return shift @files;
+}
+
+sub rename_file {
+  my ($src, $dest) = @_;
+  print "moving \"$src\" to \"$dest\"\n";
+  make_path(dirname($dest));
+  move($src, $dest) || warn "$src: $!\n";
+}
+
+sub win32_path_to_local {
+  my ($volume, $dir, $file) = File::Spec::Win32->splitpath($_[0]) ;
+  my @dirs = File::Spec::Win32->splitdir($dir);
+  shift @dirs if @dirs > 0 && $dirs[0] eq ''; # remove leading slash
+  return File::Spec->catfile(@dirs, $file);
+}
+
+sub seek_to { 
+  seek FH, $_[0], 0;
+}
+
+sub read_data {
+  my $buf;
+  read FH, $buf, $_[0];
+  return $buf;
+}
+
+sub read_string {
+  my $str = read_data($_[0]);
+  $str =~ s/\000*$//;
+  return $str;
+}
+
+# get the *.000 file
+my $hdrfile = get_fname(0);
+if (not defined $hdrfile) {
+  print "no header (*.000) file found\n";
+  exit;
+}
+
+# open the header file
+if (open FH, "<$hdrfile") {
+  # read the fixed header
+  # $hdr[0] = "MSCE" signature
+  # $hdr[2] = overall length of the header file
+  # $hdr[5] = target architecture ID
+  # @hdr[6..11] = minimal and maximal versions WinCE versions supported
+  # @hdr[12..17] = number of entries in {STRINGS,DIRS,FILES,HIVES,KEYS,LINKS}
+  # @hdr[18..23] = file offset of {STRINGS,DIRS,FILES,HIVES,KEYS,LINKS}
+  # @hdr[24..25] = {file offset, length} of APPNAME
+  # @hdr[26..27] = {file offset, length} of PROVIDER
+  # @hdr[28..29] = {file offset, length} of UNSUPPORTED
+  # other entries are unknown/undefined
+  my @hdr = unpack 'V12v6V6v8', read_data(100);
+
+  # does the file begin with "MSCE"?
+  if ($hdr[0] == 0x4543534D) {
+    # print appname and provider
+    seek_to($hdr[24]); printf "Appname:  %s\n", read_string($hdr[25]);
+    seek_to($hdr[26]); printf "Provider: %s\n", read_string($hdr[27]);
+
+    # STRINGS section
+    my @strs;
+    seek_to($hdr[18]);
+    for (1 .. $hdr[12]) {
+      my ($id, $len) = unpack 'vv', read_data(4);
+      $strs[$id] = read_string($len);
+    }
+
+    # DIRS section
+    my @dirs;
+    seek_to($hdr[19]);
+    for (1 .. $hdr[13]) {
+        my ($id, $len) = unpack 'vv', read_data(4);
+        my @ids = unpack 'v*', read_data($len); pop @ids;
+        $dirs[$id] = join '\\', map {$strs[$_]} @ids;
+        $dirs[$id] =~ s/%CE(\d+)%/$ce[$1]/eg;
+    }
+
+    # FILES section
+    seek_to($hdr[20]);
+    for (1 .. $hdr[14]) {
+      # read a FILES entry
+      my ($id, $dirid, $unk, $flags, $len) = unpack 'vvvVv', read_data(12);
+      my $fname = read_string($len);
+
+      # get file with decimal extension, rename it to dir and
+      # filename given in FILES entry
+      rename_file(get_fname($id), win32_path_to_local("$dirs[$dirid]\\$fname"));
+    }
+
+    # CREATE REGISTRY KEYS LIST
+
+    # create "setup.reg" file in REGEDIT4 format, if any KEYS entries
+    if (($hdr[16] > 0) && open REGFH, '>setup.reg') {
+      print REGFH "REGEDIT4\r\n";
+
+      my @hives;
+      my $lasthive = -1;
+
+      # seek to HIVES section and read all HIVES entries into @hives
+      seek_to($hdr[21]);
+      for (1 .. $hdr[15]) {
+        my ($id, $root, $unk, $len) = unpack 'vvvv', read_data(8);
+        my @ids = unpack 'v*', read_data($len); pop @ids;
+        $hives[$id] = join '\\',(('HKCR','HKCU','HKLM','HKEY_USERS')[$root-1],
+                                 (map{$strs[$_]} @ids));
+      }
+
+      # seek to KEYS section and loop for all KEYS entries
+      seek_to($hdr[22]);
+      for (1 .. $hdr[16]) {
+        # read KEYS entry, split off name and data components
+        my ($id,$hive,$unk,$flags,$len) = unpack 'vvvVv', read_data(12);
+        my $entry = read_data($len); $entry =~ /^(.*?)\000(.*)/s;
+        my ($name, $data) = ($1, $2);
+
+        # print REGEDIT4 entry header for key, print hive header if a
+        # different hive has been entered
+        print REGFH "\r\n[$hives[$hive]]\r\n" unless $lasthive == $hive;
+        print REGFH ''.(($name eq '') ? '@' : "\"$name\"").'=';
+        $lasthive = $hive;
+
+        # print appropriate REGEDIT4 format for data
+        if (($flags & 0x10001) == 0x10001) {
+          print REGFH sprintf 'dword:%08x', unpack('V', $data);
+        }
+        elsif (($flags & 0x10001) == 0x00001) {
+          print REGFH 'hex:'.join ',',map{sprintf'%02x',$_}unpack 'c*',$data;
+        }
+        else {
+          chop $data; chop $data if (($flags & 0x10001) == 0x10000);
+          $data =~ s/\\/\\\\/g; $data =~ s/\000/\\0/g; $data =~ s/\"/\\\"/g;
+          print REGFH '"'.$data.'"';
+        }
+        print REGFH "\r\n";
+      }
+      close REGFH;
+    }
+  }
+  else {
+    print "$hdrfile: not a Windows CE install cabinet header\n";
+  }
+  close FH;
+
+  # rename *.000 file to header.bin
+  rename_file($hdrfile, 'header.bin');
+
+  # rename *.999 file to setup.dll, if it exists
+  rename_file(get_fname(999), 'setup.dll') if get_fname(999);
+}
+else {
+  print "$hdrfile: $!\n";
+}

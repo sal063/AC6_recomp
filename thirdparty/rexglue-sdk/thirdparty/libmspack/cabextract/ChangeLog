@@ -1,0 +1,792 @@
+2023-02-19  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* ensure_filepath(): had wrong logic, for the archive-controlled
+	part of a pathname, it was using the result of lstat() whether
+	it succeeded or not, and thus not creating directories when it
+	ought to. Fixed and added a testcase for cabextract's --directory
+	option. Thanks to iq2luc for raising the issue and offering a fix.
+
+2023-02-04  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* src/cabextract.c: By default, cabextract will now overwrite
+	symlinks if they're in the path of files it wants to extract,
+	rather than follow them. This is also what unzip and tar do
+	by default. If you want to keep symlinks, use the new -k option.
+
+	This also adds new options regarding overwriting files. You can
+	now add the -n option to never overwrite, or the -i option
+	for an interactive prompt asking you if you want to overwrite.
+
+	Thanks to wereii for raising this issue and working on the
+	solution.
+
+2023-02-03  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* configure.ac: do AC_CHECK_SIZEOF([off_t]) test only after
+	AC_SYS_LARGEFILE, because the latter can alter the size of off_t.
+
+2019-04-10  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* src/cabextract.c: support more than one filter (-F) option in
+	cabextract, e.g. cabextract -F *.mov -F *.avi file.cab. Thanks
+	to caesarshift for the idea.
+
+2018-12-03 Stuart Caie <kyzer@cabextract.org.uk>
+
+	* test: support builddir being on a path that includes spaces
+
+2018-11-09 Stuart Caie <kyzer@cabextract.org.uk>
+
+	* test/case-utf8.test: Some environments (e.g. DJGPP) don't have a
+	UTF-8 locale, so won't pass the case.test testcase. Break it into
+	case-ascii.test and case-utf8.test, and skip the latter if
+	"cabextract -L" has no effect on non-ASCII filenames. Thanks to
+	Robert Riebisch for highlighting this.
+
+2018-11-08 Stuart Caie <kyzer@cabextract.org.uk>
+
+	* src/cabextract.c: make multiple attempts at iconv_open() with
+	different names for the UTF-8 encoding: "UTF-8", "UTF8" and "UTF_8".
+
+	"UTF8" works with glibc, libiconv, newlib, Solaris libc and FreeBSD
+	libc, while "UTF-8" doesn't work with newlib. But if you have
+	libiconv >= 1.13, it removes "UTF8" support unless you define
+	USE_HPUX_ALIASES, or patch it back in (as Cygwin does).
+	Thanks to Ryan Schmidt for letting me know about this.
+
+2018-11-03 Stuart Caie <kyzer@cabextract.org.uk>
+
+	* test: use the autotools test system instead of a custom makefile.
+	You can now use 'make check' to test cabextract, and the test files
+	are now distributed with cabextract.
+
+2018-10-30  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* configure.ac: remove obsolescent C library tests. AC_HEADER_STDC is
+	removed, and so are most checks for standard C headers. cabextract now
+	makes these assumptions:
+	- <ctype.h> <dirent.h> <errno.h> <limits.h> <locale.h> <stdarg.h>
+	  <stdlib.h> <string.h> <sys/stat.h> <sys/types.h> <time.h> exist
+	- <time.h> is protected from double-inclusion (AC_HEADER_TIME obsolete)
+	- if you have iconv(), towlower(), utime(), utimes(), you also
+	  have their header files
+	- BSD has memcpy(), memmove(), strrchr() in <string.h> and has
+	  strcasecmp() in <strings.h>
+
+2018-10-26  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* configure.ac, Makefile.am: use pkg-config's PKG_CHECK_MODULES
+	when looking for an external libmspack. You still need to supply
+	--with-external-libmspack to use an external libmspack. If you
+	don't like or use pkg-config, you can set the environment variables
+	libmspack_CFLAGS and libmspack_LIBS before running configure.
+
+2018-10-26  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* autogen.sh, distcheck.sh: I've introduced new build scripts.
+	Use cleanup.sh to remove all generated files, autogen.sh to
+	generate the configure script, rebuild.sh to (re)build and test
+	cabextract, and finally use distcheck.sh to both build and
+	distcheck cabextract, both with the --with-external-libmspack
+	configure option and without.
+
+2018-10-22  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* amibuild.sh: include cabinfo in the Amiga distribution. Thanks to
+	Stefan Haubenthal for the suggestion.
+
+2018-10-16  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* src/cabinfo.c: thanks to Micah Snyder for sending some very corrupt
+	files, where cabinet blocks can be found absolutely anywhere, not in
+	a continguous sequence after the file entries, I found cabinfo unfit
+	for purpose. I've updated it with a new output format, where the
+	blocks for a folder appear immediately after each folder, rather than
+	all at the end.
+
+2018-10-16  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* src/cabextract.c: use libmspack's new MSCABD_PARAM_SALVAGE mode
+	for cabextract -f, to allow extracting even more data from broken
+	cabinet files.
+
+2018-07-31  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* configure.ac: drop AC_FUNC_MKTIME. Looking into it, even C89 has
+	a mktime() function, the configure test is mostly checking if it
+	is POSIX-conformant or not, and substitutes mktime.c if not. But
+	even the replacement has no TZ handling, so it seems OK to me to
+	accept the system mktime() in any case. The fnmatch() and getopt()
+	substitutions remain because they enable GNU extensions that
+	cabextract uses (FNM_CASEFOLD and getopt_long() respectively).
+	Thanks to Stefan Haubenthal for bringing up the issue.
+
+2018-07-28  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* src/cabinfo.c: cabinfo now supports examining more than one file
+
+2018-07-17  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* amibuild.sh: support using setlocale()/iconv() in the OS4 version.
+
+	* amibuild.sh: build the 68K version with -noixemul so the resulting
+	executable doesn't need ixemul.library, libnix is used instead.
+	Because libnix has no umask(), add a HAVE_UMASK feature test.
+
+	* src/cabextract.c: add a new feature flag, LATIN1_FILENAMES,
+	which should be defined if the host environment expects ISO-8859-1
+	filenames rather than UTF-8. This adds in a step to translate
+	even UTF-8 filenames to ISO-8859-1.  It's only enabled for the
+	Amiga build so far.
+
+2018-03-07  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* configure.ac, src/cabextract.c: add support for choosing the
+	character encoding of non-UTF8 filenames, using the iconv library.
+	This is based on a patch originally developed by Kevin Tardif.
+
+	* src/cabextract.c: try setting various UTF8 locales for LC_CTYPE,
+	in order to get tolower() / towlower() to lowercase non-ASCII
+	characters.  Again, thanks to Kevin Tardif for discussing this
+	and supplying a proposed patch.
+
+2016-04-16  Stuart Caie <kyzer@cabextract.org.uk>
+
+	* configure.ac: change my email address to kyzer@cabextract.org.uk
+
+2015-05-10  Stuart Caie <kyzer@4u.net>
+
+	* wince_rename, wince_info: allow the possibility that strings have
+	more than one null byte. Thanks to Stefan Riegler for the suggestion.
+
+2015-05-10  Stuart Caie <kyzer@4u.net>
+
+	* Makefile.am: Add subdir-objects option as suggested by autoreconf.
+
+	* configure.ac: Add AM_PROG_AR as suggested by autoreconf.
+
+2015-02-25  Stuart Caie <kyzer@4u.net>
+
+	* create_output_name(): Simplify code; do path checking only after
+	output name has been constructed. Use towlower to lowercase UTF-8
+	characters. Remove both leading '/' and '\' from cab filenames and
+	change both "../" and "..\" to "xx", for Cygwin and other Cygwin-like
+	environments that use both '/' and '\' as path separators. Thanks to
+	Alexander Cherepanov and the MITRE team.
+
+2015-02-18  Stuart Caie <kyzer@4u.net>
+
+	* create_output_name(): the check against leading slashes could be
+	evaded with malformed UTF-8. Thanks to Alexander Cherepanov for
+	reporting the issue.
+
+2015-01-18  Stuart Caie <kyzer@4u.net>
+
+	* wince_rename: installed files now include their install directories.
+	Thanks to Alfonso Acosta for sending a patch.
+
+2015-01-08  Stuart Caie <kyzer@4u.net>
+
+	* create_output_name: avoid invalid memory reads because of invalid
+	UTF-8 encodings. Use the Unicode substitution character for most
+	bad UTF-8 or Unicode encodings. Thanks to Hanno Böck.
+
+	* src/cabinfo.c: stop trying to convert UTF-8 to ASCII in filename.
+	Instead, prepend "UTF: " and print it to the terminal verbatim.
+
+2011-07-19  Stuart Caie <kyzer@4u.net>
+
+	* doc/ja/cabextract.1: Katsumi Saito updated the Japanese translation
+	of cabextract's manpage to include the -t option. Thanks again!
+
+2011-05-11  Stuart Caie <kyzer@4u.net>
+
+	* src/cabinfo.c: changed the largefile detection header to the same
+	as mspack/system.h
+
+2011-04-27  Stuart Caie <kyzer@4u.net>
+
+	* src/cabextract.c: changed char* to const char* in line with changes
+	in libmspack. See mspack/ChangeLog for more details.
+
+2011-04-25  Stuart Caie <kyzer@4u.net>
+
+	* load_spanning_cabinets(): Print the error code caused by a failed
+	cabinet merge, before ruining the error code by calling cabd->close().
+	Thanks to Drew D'Addesio for reporting the problem.
+
+2011-01-19  Stuart Caie <kyzer@4u.net>
+
+	* doc/wince_cab_format.html: Identified a new file flag in the WinCE
+	header file. Thanks to Paul Sokolovsky for asking me to look into it.
+
+2010-07-19  Stuart Caie <kyzer@4u.net>
+
+	* mspack: MS-ZIP recovery now recovers more bytes. Also, when a file
+	fails to unpack because of a read error during decompression, all
+	subsequent files in the same folder will give the same error, instead
+	of claiming to be OK. See mspack/ChangeLog for full details.
+
+2010-07-17  Stuart Caie <kyzer@4u.net>
+
+	* src/cabsplit: added new program, cabsplit, which splits cabinet
+	files into one cabinet file per folder. Useful for debugging.
+
+2010-06-17  Stuart Caie  <kyzer@4u.net>
+
+	* configure.ac: Added --external-libmspack option, which allows
+	you to use the libmspack library installed on your system rather
+	than the copy bundled with cabextract. Thanks to Patrice Dumas
+	for the patch.
+
+2010-06-10  Stuart Caie  <kyzer@4u.net>
+
+	* mspack: bugs in MS-ZIP and Quantum decoders have been fixed. See
+	mspack/ChangeLog for full details.
+
+2010-05-06  Stuart Caie  <kyzer@4u.net>
+
+	* configure.ac, cabextract.c: added support for the one-arg mkdir()
+	found in the MinGW32 environment. Thanks to Kevin O'Rourke for
+	reporting this.
+	
+2009-09-24  Stuart Caie   <kyzer@4u.net>
+
+	*  doc/wince_cab_format.html, src/wince_info, src/wince_rename:
+	The files in Windows CE cabinets are numbered after the first
+	ID in the FILES section, rather than what I termed the "real ID".
+	Fixed the documentation and the wince tools to match. The purpose
+	of the field previously called "real ID" is now unknown. Thanks
+	to Marco Schindler for discovering this.
+
+2007-08-07  Stuart Caie   <kyzer@4u.net>
+
+	* all: cabextract and libmspack have moved to the domain
+	www.cabextract.org.uk. Updated the documentation to reflect this.
+	
+2007-01-20  Stuart Caie   <kyzer@4u.net>
+
+	* create_output_name(): add UTF-8 support for 6-byte characters.
+	Apparently they go that far these days.
+
+2007-01-20  Stuart Caie   <kyzer@4u.net>
+
+	* doc/wince_cab_format.html, src/wince_info: The REGKEYS "unknown"
+	flag appears to be a boolean indicating whether variable
+	substitution should take place. Thanks to Dominique Gallot for
+	discovering it.
+
+2006-06-21  Stuart Caie   <kyzer@4u.net>
+
+	* create_output_name(): add UTF-8 support for 4-byte characters.
+
+2006-03-01  Stuart Caie   <kyzer@4u.net>
+
+	* process_cabinets(): on the advice of Mike Mohr, cabextract no
+	longer skips entire cabinets, when create_output_filename()
+	returns NULL, it only skips the affected files now.
+
+2005-10-30  Stuart Caie   <kyzer@4u.net>
+
+	* src/cabextract.c: added test mode to cabextract, wherein files
+	aren't extracted, only passed through an MD5 checksum generator.
+	cabextract then lists which files passed and which files failed.
+
+	* process_cabinets(): fixed the problem where filters don't match
+	when -d option is also used. The filters match on the full
+	output-file path, including the -d directory specified. We now
+	trim this off before matching.
+	
+2005-10-29  Stuart Caie   <kyzer@4u.net>
+
+	* fnmatch.c, getopt.c: finally resolved problems with all the GNU
+	replacement functions. Obtained new versions of fnmatch and
+	getopt, removing the need for alloca.c, coded out the requirement
+	for mempcpy in getopt.c (I don't think it was needed anyway, but
+	just to be sure I changed it to use just memcpy). Tested on Mac OS X
+	(both native and using fink), Solaris 8 and Cygwin as well as Debian.
+
+	* configure.ac: Removed the AC_FUNC_ALLOCA and
+	AC_REPLACE_FUNCS([mempcpy])
+	
+2005-07-05  Stuart Caie   <kyzer@4u.net>
+
+	* src/cabinfo.c: This can now search and print accurate output for
+	cabinets (and files containing cabinets) over 2GB.
+
+2005-04-21  Stuart Caie   <kyzer@4u.net>
+
+	* src/cabinfo.c: This now prints if the NAME_IS_UTF flag is set for
+	each file.
+
+2004-10-19  Stuart Caie   <kyzer@4u.net>
+
+	* create_output_name(): fixed out-by-one error in UTF-8 decoder. All
+	UTF-8 filenames would reach the "error in UTF-8 decode" section,
+	because the test for that section was "pointer >= last_character",
+	not "pointer > last_character".
+
+2004-10-18  Stuart Caie   <kyzer@4u.net>
+
+	* process_cabinet(): now accepts that failure of create_output_name()
+	is an error, and also lets that function print an error message
+	rather than printing one itself.
+
+	* create_output_name(): improved the two error messages that could
+	be printed.
+
+2004-10-15  Stuart Caie   <kyzer@4u.net>
+
+	* create_output_name(): removes leading "./" and "../" as well as
+	leading slashes from the input filename. Thanks to David Banz for
+	pointing this out, as well as http://www.securityfocus.com/bid/11376/
+	
+2004-07-16  Stuart Caie   <kyzer@4u.net>
+
+	* Makefile.am: added -DMSPACK_NO_DEFAULT_SYSTEM. Why wasn't this in
+	earlier?
+
+	* src/cabextract.c: added prototypes of the cabx_ functions,
+	removed the prototype of cabextract_system and moved the real
+	cabextract_system to before main(). This is so AIX doesn't fail on
+	seeing an extern and a static definition of the same
+	global. That's messed up!
+
+	* alloca.c, fnmatch*, getopt*, mempcpy.c: imported these from
+	gcc's latest libiberty. This should fix problems with Cygwin.
+	
+2004-03-18  Stuart Caie   <kyzer@4u.net>
+
+	* process_cabinet(): added missing printf argument when errors on
+	extracting to stdout occur. Thanks to Moritz Barsnick for finding
+	it.
+
+2004-03-08  Stuart Caie   <kyzer@4u.net>
+
+	* all: tidy-ups for 1.0 release
+	
+2003-09-04  Stuart Caie   <kyzer@4u.net>
+
+	* set_date_and_perm(): implemented the utimes() alternative to
+	utime().
+
+	* set_date_and_perm(): sets the date before the permissions are set,
+	in case read-only files really do get -r--r--r-- permissions and
+	your dumb OS won't let the date can't be changed.
+
+2003-08-14  Stuart Caie   <kyzer@4u.net>
+
+	* wince_cab_format.html: Shaun Jackman worked out six more fields
+	in the header.
+
+2003-08-12  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: rewrote all function documentation in javadoc /
+	doxygen format.
+
+	* configure.ac: added AC_FUNC_ALLOCA / @ALLOCA@ / alloca.c because
+	I noticed that fnmatch.c uses alloca().
+
+2003-08-11  Stuart Caie   <kyzer@4u.net>
+
+	* main(): Removed the redundant args.list with args.view. I was
+	wondering why cabextract -l file.cab was trying to extract instead
+	of list...
+
+2003-08-06  Stuart Caie   <kyzer@4u.net>
+
+	* configure.in, Makefile.am: rewrote the configure and build
+	scripts, in the new style. fnmatch sources are now bundled, and
+	now all the support code and tools are in the top directory,
+	leaving src/ with nothing but cabextract code in it.
+
+2003-08-05  Stuart Caie   <kyzer@4u.net>
+
+	* wince_cab_format.html: converted the WinCE CAB format document
+	from text to HTML.
+
+2003-07-29  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: now rewritten to use libmspack.
+
+	* process_cabinet(): the cabinet listing now has space for 10
+	digits in the size field, for those really big compressed files.
+	The maximum size of a file is 4294967295 bytes.
+	
+2003-07-18  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: started refactoring cabextract to use the
+	libmspack library. Moved everything out of cabextract.c and will
+	start moving things back in as necessary.
+
+	* doc, mspack: added a doc directory, where fun things like manual
+	pages, magic files and file format documents go. Made a directory for
+	libmspack files.
+
+2003-06-07  Stuart Caie   <kyzer@4u.net>
+
+	* mspack: started creation of the libmspack library, based on the
+	cabextract code. See http://www.kyz.uklinux.net/libmspack/ for more
+	details about the library.
+
+2003-05-14  Stuart Caie   <kyzer@4u.net>
+
+	* magic.cabinet: fixed errors in CAB magic definition
+
+	* magic.wince: added magic file entry for WinCE install format
+
+	* configure.in: added large file support
+
+2003-04-21  Stuart Caie   <kyzer@4u.net>
+
+	* ja/cabextract.1: Katsumi Saito kindly translated the updated
+	manual page into Japanese for me.
+
+2003-04-20  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.1: finally decided on feature set for cabextract 0.7,
+	so I updated the manual to reflect that.
+	
+2003-03-12  Stuart Caie   <kyzer@4u.net>
+
+	* wince_cab_format.txt: reverse engineered most of the file format
+	for Windows CE installation CAB header files. Windows CE uses
+	normal cabinet files, but the files inside the cabinets use short
+	filenames and a special binary header to specify full filenames,
+	install directories, registry entries and symbolic links.  If
+	anyone wants to help fill in the remaining fields, I'm all ears.
+	
+2002-11-19  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: moved the generation of the correct unix filename
+	for an extracted file out of file_open() and into the main
+	process_cabinet() function (it now has a helper function called
+	create_output_name()). This is to make the real filename available
+	outside of file_open(). (See below)
+
+	* file_close(): chmod() and utime() are now called on the correct
+	filename :)
+
+2002-11-13  Stuart Caie   <kyzer@4u.net>
+
+	* unix_directory_seperators(): this is a new function added to
+	determine whether the CAB file is using "wrong" UNIX-style forward
+	slashes as directory seperators. Microsoft CAB files use
+	MS-DOS backslashes, however the tools Cablinux and PowerArchiver
+	create CABs with forward-slashes.
+	
+2002-09-12  Stuart Caie   <kyzer@4u.net>
+
+	* file_cabs_in_file(): if the file itself doesn't exist, we no
+	longer print "Not a Microsoft cabinet file" for not finding any
+	cabinets in that file.
+
+2002-09-08  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: cabextract used to segv if an LZX or Quantum
+	folder came after an MSZIP folder, because the window pointer
+	would be filled in by MSZIP's state. To solve this, I took the
+	window pointers and associated variables out of the state union,
+	and I also started clearing the state structure on startup. I also
+	removed the 'what was the old compression type / free window' code
+	and replaced it with a simple 'free LZX/QTM window if it exists'
+	before ZIP initialisation.
+
+2002-09-08  Stuart Caie   <kyzer@4u.net>
+
+	* find_cabs_in_file(): if a file begins with "ISc(", cabextract
+	now prints a message about how to unpack InstallShield '.cab'
+	files, which begin with this signature.
+	
+2002-09-08  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: After seeing what some people think the command
+	line syntax is for cabextract is
+	(e.g. http://slashdot.org/comments.pl?sid=39401&cid=4210033) I
+	have decided to be nice to people who don't read manuals, and
+	refuse to extract files given on the command line if they've
+	already been extracted as part of another cabinet. This does
+	preclude the scenario where a file is not only part of a
+	multi-part set, but has a cabinet at offset 0 and _also_ has
+	embedded cabs later on. The new functionality is implemented by
+	the new functions remember_cabinet() and known_cabinet(), which
+	use a simple linked list. If you want the old behaviour of
+	cabextract back, do "find <cabs> -exec cabextract {} \;".
+	
+2002-09-08  Stuart Caie   <kyzer@4u.net>
+
+	* configure.in: Upgraded my autoconf to one that has the AC_EXEEXT
+	bug fixed (look up AC_EXEEXT xSYM on the Internet :). Now it
+	complains about me writing to LIBOBJS directly, so I use the macro
+	AC_LIBOBJ twice to add getopt and getopt1 to LIBOBJS.
+
+2002-08-20  Stuart Caie   <kyzer@4u.net>
+
+	* AUTHORS, ChangeLog, NEWS, cabextract.c: fixed mis-spellings of
+	Matthew Russotto's name.
+
+	* ChangeLog: finished a half-completed changelog entry. 
+
+
+2002-08-12  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: now prints all errors and warnings to stderr
+	rather that stdout. I finally noticed that perror() prints to
+	stderr, and I want to follow suit.
+
+2002-08-11  Stuart Caie   <kyzer@4u.net>
+
+	* extract_file(): now prints out the correct cabinet name in error
+	messages, in the case of files which are split over multiple
+	cabinet files and the 2nd or later split cabinet contains the
+	error.
+
+	* QTMdecompress(): fixed the QTM decoding error - basically, Matthew
+	used the bitstream reading macros from my LZX decompressor. Sadly,
+	these macros can only guarantee at maximum 17 bits available in the
+	bit buffer, and Quantum uses up to 19 bits. I rewrote the Quantum
+	bit buffer macros to be multi-pass (and therefore slower) so they
+	can get the requisite number of bits.
+
+	* QTMinit(): after fixing the decoding bug, I noticed that files
+	always failed extraction when going to a second folder. It turns out
+	that I forgot to reset QTM's window_posn.
+
+	* configure.in: added limits.h to the list of checked includes
+
+	* cabextract.c: ULONG_BITS now defined in terms of CHAR_BIT from
+	<limits.h> rather than fixed to 8 bits per char. Oddly, my system
+	seems to include <linux/limits.h> rather than <limits.h>.  So, for
+	people like me, I also define CHAR_BIT to be 8 if it's not already
+	defined.
+
+2002-07-29  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.c: The Ministry of Sensible Naming dictates that 
+	load_cab() be renamed find_cabs_in_file(), and lose the 'search'
+	argument. Calls to load_cab() where the search argument = 0 (i.e.,
+	when loading spanning cabinets) be changed to load_cab_offset(x,0).
+
+2002-07-25  Stuart Caie  <kyzer@4u.net>
+
+	* load_cab(): Bah! off_t is defined as a signed long int, and
+	not an unsigned long int as I had previously thought. This means the
+	'valid cabinet' comparisions may fail. I have fixed this by making
+	these comparisons unsigned.
+
+	* cabinfo.c: added the new search mechanism to cabinfo.
+
+2002-07-25  Stuart Caie   <kyzer@4u.net>
+
+	* process_cabinet(): rewrote the loading mechanism. Uses the new
+	load_cab() to get a list of cabinets in the base file. Also does
+	bi-directional loading of spanning cabinets.
+
+	* load_cab(): now takes a 'search' parameter. if search=0, the old
+	loading behaviour is performed, but if search=1, it now does the
+	exhaustive search for all matching cabinets and tries to load
+	them. If a load succeeds, it skips that section of the
+	file. Therefore, all embedded cabinets are found, yet most of the
+	file does not need to be searched.
+
+	* cabinet_find_header(): removed, see above. Also, in shifting the
+	search, I altered the search mechanism. It now uses a state
+	machine to get around border cases, rather than the flaky 'save
+	the last 20 bytes and put them at the start the next time around'.
+	
+	* cabinet_read_entries(): now checks the MSCF signature, as there
+	is no longer a cabinet_find_header() to do this.
+	
+2002-07-23  Stuart Caie   <kyzer@4u.net>
+
+	* LZXdecompress(), QTMdecompress(): On systems where the LZ window
+	pointer is in "low memory", runsrc (window pointer - match offset)
+	could be below address 0, which wraps around to the end of memory,
+	so it appears runsrc is ahead of the LZ window, and so it does not
+	need 'fixing' before the match copy. Therefore the match data is
+	read from the incorrect, high address. Thanks to the NetBSD team
+	for discovering this and providing the patch.
+
+2002-07-22  Stuart Caie   <kyzer@4u.net>
+
+	* file_close(): now honours your umask settings when extracting
+	files. Thanks to the NetBSD team for the patch.
+	
+	* cabinet_seek(), cabinet_skip(): these now print errors if
+	fseek() returns an error.
+	
+	* QTMdecompress(): finally! Added an implementation of the Quantum
+	method which was researched and written by Matthew Russotto. Many
+	thanks to him for all the hard work he did to produce this. I
+	tidied up the code to be more my style (and to be quite a bit
+	faster by inlining the bit buffer, H, L and C), but it's still all
+	his code running.
+
+	* find_next_cabinet_file(): this is a new function which finds the
+	"next cabinet" by opening the directory it would be in and reading
+	each filename case-insensitively. It also handles any such "next
+	cabinets" with directory elements (delimited with MS-DOS
+	backslashes).
+
+	* process_cabinet(): now uses find_next_cabinet_file() to get the
+	next cabinet file. This function also replaces the hack that gets
+	any directory path which might be embedded in the base cabinet
+	filename (as mentioned on the command line).
+
+2002-07-21  Stuart Caie   <kyzer@4u.net>
+
+	* file_close(): fixed off-by-one error in setting the extracted
+	file date. Thanks to Claus Rasmussen.
+
+2002-07-20  Stuart Caie   <kyzer@4u.net>
+
+	* file_open(): now removes any leading slashes from the name of
+	the file to be extracted. Thanks to the James Henstridge and
+	David Leonard for patches.
+
+	* ensure_filepath(): now does not try to examine the directory ""
+	(i.e. no directory at all) if given an absolute path (one that
+	start with a slash). Thanks to the James Henstridge for the patch.
+
+2002-04-30  Stuart Caie   <kyzer@4u.net>
+
+	* cabextract.spec.in: changed the fixed version number to @VERSION@
+
+2002-04-06  Stuart Caie   <kyzer@4u.net>
+
+	* Makefile.am, configure.in: used the guide no_getopt_long.txt
+	included with the gengetopt package to add getopt_long
+	configuration to cabextract. Hopefully it all works now. Thanks to
+	the many people who pointed out this problem and to the many
+	people who offered solutions.
+	
+2001-09-06  Stuart Caie   <kyzer@4u.net>
+	
+	* Makefile.am, configure.in: made cabextract.spec one of the auto-
+	generated files. Now I can do 'make distcheck' here to build a
+	distribution which can be installed using 'rpm -tb
+	cabextract-0.6.tar.gz'. Thanks to Daniel Resare for the know-how.
+	
+2001-08-20  Stuart Caie   <kyzer@4u.net>
+
+	* Makefile.am: added an LDADD line for cabextract's LIBOBJS
+	generated by configure. This means the AC_REPLACE_FUNCS line
+	should actually have an effect.
+
+	* configure.in: Removed getopt_long and mktime from the
+	AC_CHECK_FUNCS, as this is done anyway.
+	
+2001-08-19  Stuart Caie   <kyzer@4u.net>
+
+	* Makefile.am, configure.in, cabextract.c: moved the GNU getopt
+	sources to become an automatically added dependency if
+	getopt_long() can't be found in the standard library, just like
+	mktime() is handled. The getopt_long(), struct option and optarg
+	and optind definitions are taken from getopt.h if possible. If
+	they're not there, but getopt_long() was found with standard
+	includes files, it's assumed they're defined in the standard
+	include files. Otherwise, we define them ourselves.
+
+	* cabextract.c: now gets VERSION defined from configure via
+	config.h.
+
+	* decompress(): if the 'fix' option was used, the output buffer
+	would always be cleared before block decompression. A nice idea,
+	but the MSZIP method likes to keep the output buffer between
+	blocks. Thanks to Fernando Trias for spotting this. Stopped
+	clearing the output buffer.
+	
+	* main(): the 'fix' variable wasn't initialised to zero, so on
+	some architectures, where the stack-space allocated to the
+	variable isn't cleared to zero, you always got the 'fix' option
+	selected. See above for why this was bad.
+
+	* process_cabinet(): now prints "Finished processing cabinet" when
+	finished extracting, instead of just a blank line. Still prints
+	blank lines for listing files.
+	
+2001-08-05  Stuart Caie   <kyzer@4u.net>
+
+	* Makefile.am: the manpage wasn't included in the distribution.
+	Fixed and re-issued the 0.3 release.
+	
+2001-08-02  Stuart Caie   <kyzer@4u.net>
+
+	* decompress(): now takes a 'fix' flag, which causes MSZIP errors
+	to be ignored.
+
+	* cabinet_get_entries(): now keeps the printable information about
+	previous and next cabinet parts
+
+	* process_cabinet(): now prints the printable information about
+	the next cabinet part in a multi-part cabinet
+	
+	* file_open(): now prepends a given directory if wanted, and can
+	make the filename lowercase if wanted.
+
+	* main(): changed to using getopt_long to parse arguments. Added
+	-L (lowercase), -d (output to directory), -f (fix corrupt cabs),
+	-h (help), -q (quiet) and -v was recycled to become --version,
+	when used on its own.
+
+	* LZXdecompress(): major bug fixed; the updated R0, R1 and R2 in
+	uncompressed blocks were being stored in the uncomp_state block,
+	not local variables. At the end of the function, the local values
+	are always written back to the uncomp_state block. So the values
+	placed there by the uncompressed block header were always
+	overwritten. Thanks to Pavel Turbin for providing an example of
+	this.
+	
+	* rindex(): this is the BSD precursor of the ANSI standard
+	function strrchr(). Oops! Now uses strrchr(), or rindex() if
+	strrchr() isn't available.
+
+	* cabinet_find_header(): now prints an error message if it can't
+	find a header.
+	
+2001-04-30  Stuart Caie   <kyzer@4u.net>
+
+	* fixed includes to include both <strings.h> and <string.h> if
+	they both exist, and made some signedness conversions explicit.
+	This should let cabextract compile with SGI's native
+	compiler. Thanks to Markus Nullmeier for the patch.
+	
+2001-03-04  Stuart Caie   <kyzer@4u.net>
+
+	* main(): now prints the version of cabextract in the copyright
+	line.
+	
+	* cabinet_find_header(): now searches any kind of file, not just
+	files beginning with 'MZ' header. Also, always searches entire
+	file.  This slows the search down, but increases the usefulness of
+	the search overall, IMHO. Thanks to Eric Sharkey for pointing this
+	out.
+	
+	* LZXdecompress(): fixed problem in intel decoding: E8 must not
+	appear in the last 10 bytes, not the last 6 bytes... Thanks to Jae
+	Jung who pointed this out to me. I didn't believe him at first,
+	but he was quite right. Also thanks to Antoine Amanieux for
+	providing example files affected by this.
+
+	* process_cabinet(): now extends multipart cabinet filenames to be
+	in the same directory as the base cabinet.
+
+	* cabinet_open(): now only lowercases the filename part of a
+	cabinet name, not the path part.
+	
+2001-03-03  Stuart Caie   <kyzer@4u.net>
+
+	* LZXdecompress(): fixed LZX bit buffer exhaustion in where
+	READ_HUFFSYM() requests more bits than the buffer actually
+	contains: top-of-loop overflow check now allows for the input
+	pointer to be 16 bits past the end of the buffer, but checks to
+	ensure none of those 16 bits are actually used. Also increased
+	decomp_state.inbuf by two bytes and clear the two bytes after
+	loaded block in decompress(). Thanks to Jae Jung for pointing out
+	this bug, and for providing example files which exposed the bug.
+
+2001-02-26  Stuart Caie <kyzer@4u.net>
+
+	* added configure script / makefile using automake.
+
+	* file_close(): now sets the timestamp on extracted files.

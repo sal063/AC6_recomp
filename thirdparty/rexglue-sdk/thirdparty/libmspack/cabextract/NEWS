@@ -1,0 +1,183 @@
+New in 1.11
+* Fixed bug in creating directories given in archives, e.g. extracting file
+  "a/b.c" from a cab file wouldn't create directory "a" (broken in 1.10)
+
+New in 1.10
+* Multiple -F filters can be given. cabextract will extract files matching
+  ANY of the filters
+* cabextract now overwrites symlinks by default. This is to be consistent
+  with other archive tools. Use the new -k option for the old behaviour of
+  keeping symlinks. This does not affect symlinks in the -d dirpath option
+* New "-n" option to never overwrite files.
+* New "-i" option to interactively prompt if you want to overwrite files
+
+New in 1.9
+* Fixed invisible bad extraction when using cabextract -F (broken in 1.8)
+* Fixed configure --with-external-libmspack which was broken in 1.8
+* configure --with-external-libmspack will now use pkg-config. To configure
+  it manually, set environment variables libmspack_CFLAGS and libmspack_LIBS
+  before running configure.
+* Now includes the test suite (make check)
+
+New in 1.8
+* cabextract -f now extracts even more badly damaged files than before
+
+New in 1.7
+* cabextract now supports an --encoding parameter, to specify the character
+  encoding of CAB filenames if they are not ASCII or UTF8
+* cabextract -L now lowercases non-ASCII characters
+
+New in 1.6
+* cabextract now prevents archive files giving themselves absolute path access
+  using badly UTF-8 encoded slashes.
+* Because Cygwin allows both '/' and '\' as path separators, cabextract now
+  removes both leading '/'s and '\'s and changes both "../" and "..\" in
+  CAB filenames to "xx".  You can no longer have a CAB filename called e.g
+  "\/t" (file "t" in the directory "\"). If you need this, create a CAB file
+  where the filename is "./\/t" instead.
+
+New in 1.5
+* cabextract replaces bad Unicode characters in filenames with the
+  standard Unicode replacement character
+* wince_rename now puts files under the correct installation path
+* Several crashes and hangs were found by Debian project members
+  using the afl (American fuzzy lop) tool to generate corrupt
+  cabinet files. These crashes and hangs have been fixed.
+
+New in 1.4:
+* A bug in the LZX decompressor was fixed.
+* cabextract is now more tolerant when processing cabinet sets.
+* cabextract is now compatible with even more compilers, and
+  now supports 64-bit file I/O on platforms where it's completely
+  native, like Mac OS X 10.6 and Fedora x86_64.
+* cabextract will no longer print "library not compiled to support
+  large files" while reading small files.
+* The Windows CE installation format document was improved.
+
+New in 1.3:
+* Bugs in the MS-ZIP and Quantum decompressors have been fixed.
+* MS-ZIP recovery has been improved.
+* cabextract should now compile with MinGW
+
+New in 1.2:
+* "-t" option: Allows you to test that every file can be extracted without
+  having to extract it. This also prints the MD5 checksum of the file.
+* UTF-8 filenames are now decoded correctly.
+* Large files (>2GB) are now searched correctly for cabinets.
+* Problems with the GNU library code have been fixed.
+* Several bugs in the LZX and Quantum decompressors have been fixed.
+
+New in 1.1:
+* A security vulnerability has been fixed. If the files within a cabinet
+  file include the directory ".." in their filename, this will be changed to
+  "xx", to prevent directory traversal by a malicious cabinet (e.g. a cabinet
+  with "..\etc\passwd", "..\..\etc\passwd" and so on)
+* The GNU library code used has been upgraded to the latest from libiberty,
+  so it should now work better with Cygwin.
+* cabextract should now compile cleanly on AIX.
+
+New in 1.0:
+* The libmspack library is used for all the hard work. You should find
+  cabextract more robust, and fractionally faster. See the libmspack website
+  at https://www.cabextract.org.uk/libmspack/ for more on this library.
+* Fixed a bug (now moved to libmspack) where CAB files that had two kinds of
+  compression would crash.
+* CAB files should no longer get "/" and "\" mixed up, even with non
+  MS-DOS cabinet files created by tools like Powerarchiver and Cablinux.
+* Now ignores CAB files listed on the command line that have already been
+  used as part of a multipart set. You can now type "cabextract *.cab" on
+  your Win95 cabinet set, and cabextract will not extract all the files
+  sixty times over.
+* Now supports reading and extracting large (more than 2Gb) files.
+* "-L" option: viewing the archive pays attention to the "-L" flag, and
+  shows the filenames in lowercase.
+* "-L" option: cabextract now correctly lowercases cabinet files with
+  Unicode filenames.
+* "-l" option: viewing the archive should always show forward slashes as
+  directory seperators.
+* "-F" option: Now you can choose which files are extracted from the cab.
+  For example, "cabextract -F '*.wav' music.cab" extracts only WAV files.
+* "-s" option: Now you can limit which multipart cabinets are used. For
+  example, "cabextract -s WIN98_5*.CAB" will only extract files from
+  WIN98_50.CAB through WIN98_59.CAB.
+* "-p" option: Now you can extract files to stdout rather than disk.
+* Now comes with an experimental "wince_info" and "wince_rename" perl
+  scripts in the src/ directory, for examining and processing Windows CE
+  installation cabinet header files. There is also the "cabinfo" command
+  for examining the structure of a cab file. As this information is not
+  very useful to most people, none of these three tools are installed.
+* Both the English and Japanese manual page have been updated.
+* cabextract now alerts you if you try to unpack InstallShield cabinets.
+* The definition of Microsoft cabinet files for UNIX's "magic" file, in
+  doc/magic, has been fixed, and a definition of Windows CE install cabinet
+  header files has also been added.
+
+New in 0.6:
+* Quantum method is now supported! Many thanks to Matthew Russotto for this.
+* Fixed more build problems on non-glibc systems. I have now followed the
+  'FSF approved' method for including getopt_long, so hopefully Solaris
+  and all the other OSes won't have a problem building cabextract any
+  more.
+* Japanese manual page included -- you will have to install the file
+  ja/cabextract.1 by yourself, it's not part of the install process.
+* Now searches for spanning cabinet files in a case-insensitive way. It
+  also searches in both directions for spanned cabinets (each spanned
+  cabinet can include a 'previous' and 'next' cabinet filename), so you
+  can also specify a cabinet in the middle of a set and get the full set,
+  rather than have to work out what the first cabinet is.
+* An off-by-one month error in file dates was fixed.
+* Cabinets with files beginning with "/" (or rather, "\") no longer
+  extract to your root directory.
+* A better embeded cabinet search algorithm was introduced for finding
+  those elusive cabinets in files and executables :)
+* Now you can find more than one cabinet in a file (if there is
+  more than one to find), and it will be extracted or listed as normal.
+* Files and directories created now honour your umask settings.
+* Errors and warnings are now printed to stderr.
+
+New in 0.5:
+* Fixed build problems on non-glibc systems.
+
+New in 0.4:
+* Fixed a new bug I added by myself to 0.3... :) It corrupts all MS-ZIP
+  compressed cabinets after the first 32k, and it should be very obvious
+  that corruption has taken place.
+* cabextract should be happier building on Cygwin and other such
+  architectures -- you should be able to "./configure; make; make install"
+  again. This was broken in 0.3 due to the getopt.c / getopt1.c weirdness
+  I copied from GNU hello.
+* Now prints 'Finished processing cabinet.' after completing the extraction
+  a cabinet.
+
+New in 0.3:
+* Fixed very rare, but invisible decrunching bug... if you have any
+  important things you extracted with cabextract, extract them again
+  to be sure they're not corrupt.
+* cabextract now tells you if a file isn't a cabinet file.
+* cabextract now goes on to the next file, if extracting one fails.
+* cabextract now goes on to the next cabinet, if extracting one fails.
+* cabextract lets you try to 'fix' some cabinets by skipping over bad
+  blocks rather than failing on them. If you have a corrupt cabinet, try
+  the '-f' option, and see how it goes.
+* Use the new '-d dir' option to extract cabinets to a given directory.
+* Use the new '-L' option to turn the extracted filenames to lowercase.
+* Use the new '-q' option to be quiet while extracting archives.
+* cabextract now prints more information while it's probing multi-part
+  cabinets
+
+New in 0.2:
+* new even-easier installation: ./configure; make; make install
+* Extracted files now have their timestamps set
+* Fixed bug which occured when extracting tiny files 
+* Fixed completely invisible intel E8 decoding bug... if you have any
+  important things you extracted with cabextract, extract them again
+  to be sure they're not corrupt.
+* cabinet search extended to look through *any* file for cabinets, not
+  just MS-DOS/Windows executables.
+* Now looks for multipart cabinets in the same directory as the base cabinet.
+  This means you can do stuff like 'cd /tmp && cabextract /cdrom/part01.cab'
+
+New in 0.1:
+* supports MSZIP and LZX compression methods
+* supports split cabs and cabs embedded in executables
+* initial release

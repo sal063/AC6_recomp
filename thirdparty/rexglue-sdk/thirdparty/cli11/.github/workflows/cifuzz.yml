@@ -1,0 +1,26 @@
+name: CIFuzz
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build Fuzzers (dry run)
+        uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@master
+        with:
+          oss-fuzz-project-name: cli11
+          language: 'c++'
+          dry-run: true
+
+      - name: Run Fuzzers (dry run)
+        uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@master
+        with:
+          oss-fuzz-project-name: cli11
+          language: 'c++'
+          fuzz-seconds: 600
+          dry-run: true

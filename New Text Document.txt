@@ -1,0 +1,6 @@
+set CLAUDE_CODE_USE_OPENAI=1
+set OPENAI_API_KEY=gg-gcli-t4ABavgSCLVd0yqCr-Kx0W2O8vd3xUpXO0Hyld9GIhg
+set OPENAI_BASE_URL=https://gcli.ggchan.dev/v1
+set OPENAI_MODEL=gemini-3.1-pro-preview
+
+openclaude

@@ -1,0 +1,100 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build-and-test:
+    name: test-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-22.04-gcc
+            os: ubuntu-22.04
+            compiler: gcc
+
+          - name: ubuntu-22.04-clang
+            os: ubuntu-22.04
+            compiler: clang
+
+          - name: ubuntu-22.04-clang-tidy
+            os: ubuntu-22.04
+            compiler: clang
+            cmake_vars: "-DINJA_ENABLE_CLANG_TIDY=ON"
+
+          - name: ubuntu-22.04-clang-15-no-exceptions
+            os: ubuntu-22.04
+            compiler: clang-15
+            cmake_vars: "-DCMAKE_CXX_FLAGS=-fno-exceptions -DBUILD_TESTING=OFF"
+
+          - name: ubuntu-24.04-gcc
+            os: ubuntu-24.04
+            compiler: gcc
+
+          - name: windows-2022-msvc
+            os: windows-2022
+            compiler: msvc
+
+          - name: windows-2022-clang
+            os: windows-2022
+            compiler: clang
+
+          - name: windows-2022-gcc
+            os: windows-2022
+            compiler: gcc
+
+          - name: windows-2025-msvc
+            os: windows-2025
+            compiler: msvc
+
+          - name: macOS-13-gcc
+            os: macOS-13
+            compiler: gcc
+
+          - name: macOS-13-clang
+            os: macOS-13
+            compiler: clang
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Cpp
+        uses: aminya/setup-cpp@v0.46.1
+        with:
+          compiler: ${{ matrix.compiler }}
+
+      - name: Build & Test Debug
+        run: |
+          cmake -E remove_directory build
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build -j2
+          cd build && ctest -j2 --output-on-failure
+
+      - name: Build & Test Release
+        run: |
+          cmake -E remove_directory build
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_vars }}
+          cmake --build build -j2
+          cd build && ctest -j2 --output-on-failure
+
+
+  check-single-include:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Update single include
+      run: |
+        mv single_include/inja/inja.hpp single_include/inja/inja_old.hpp
+        bash scripts/update_single_include.sh
+
+    - name: Check if equal
+      working-directory: single_include
+      run: diff inja/inja.hpp inja/inja_old.hpp >/dev/null
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: single_include_inja
+        path: single_include/inja/inja.hpp

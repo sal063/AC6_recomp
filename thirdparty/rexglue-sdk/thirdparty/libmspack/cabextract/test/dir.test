@@ -1,0 +1,59 @@
+#!/bin/sh
+# test that cabextract creates directories as expected
+. test/testcase
+
+# extract to user-chosen absolute path
+"$cabextract" -d $tmpdir/test cabs/dir.cab >$actual
+compare_with <<EOF
+Extracting cabinet: cabs/dir.cab
+  extracting $tmpdir/test/plain.c
+  extracting $tmpdir/test/1/2/3/4.c
+
+All done, no errors.
+EOF
+
+# cd to $tmpdir
+basedir=`pwd`
+cd $tmpdir || exit 1
+
+# extract to current path
+"$cabextract" "$basedir/cabs/dir.cab" >$actual
+compare_with <<EOF
+Extracting cabinet: $basedir/cabs/dir.cab
+  extracting plain.c
+  extracting 1/2/3/4.c
+
+All done, no errors.
+EOF
+
+# extract to user-chosen relative directory
+"$cabextract" -d tdir "$basedir/cabs/dir.cab" >$actual
+compare_with <<EOF
+Extracting cabinet: $basedir/cabs/dir.cab
+  extracting tdir/plain.c
+  extracting tdir/1/2/3/4.c
+
+All done, no errors.
+EOF
+
+# extract to user-chosen relative directory with two elements
+"$cabextract" -d a/b "$basedir/cabs/dir.cab" >$actual
+compare_with <<EOF
+Extracting cabinet: $basedir/cabs/dir.cab
+  extracting a/b/plain.c
+  extracting a/b/1/2/3/4.c
+
+All done, no errors.
+EOF
+
+# extract to user-chosen relative directory with two elements, one of which already exists
+"$cabextract" -d tdir/a "$basedir/cabs/dir.cab" >$actual
+compare_with <<EOF
+Extracting cabinet: $basedir/cabs/dir.cab
+  extracting tdir/a/plain.c
+  extracting tdir/a/1/2/3/4.c
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

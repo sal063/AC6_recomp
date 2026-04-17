@@ -1,0 +1,90 @@
+#!/bin/sh
+# test cabextract can join up split cabinets, whichever you start with
+. test/testcase
+
+"$cabextract" -t cabs/split-1.cab >$actual
+compare_with <<'EOF'
+cabs/split-1.cab: extends to Split-2.CAB (Split cabinet file 2/5)
+cabs/split-1.cab: extends to Split-3.CAB (Split cabinet file 3/5)
+cabs/split-1.cab: extends to Split-4.CAB (Split cabinet file 4/5)
+cabs/split-1.cab: extends to Split-5.CAB (Split cabinet file 5/5)
+Testing cabinet: cabs/split-1.cab
+  small1.bin  OK                               2ad5ba0f497f1e597ab187a2dfaa2e29
+  small2.bin  OK                               1f862f9e36a32a74202c1120b9f06af7
+  medium1.bin  OK                              0a7bd124a4c03a30329bd9ff06f71df7
+  medium2.bin  OK                              b4b0a02ad6a1170d4b3db18cec616fcc
+  small3.bin  OK                               bbaecacfeba976165e9d77bbecb0cbde
+  medium3.bin  OK                              b98fe17e8afbcf05aefc5b2c4badbc28
+
+All done, no errors.
+EOF
+
+"$cabextract" -t cabs/split-2.cab >$actual
+compare_with <<'EOF'
+cabs/split-2.cab: extends backwards to Split-1.CAB (Split cabinet file 1/5)
+cabs/split-2.cab: extends to Split-3.CAB (Split cabinet file 3/5)
+cabs/split-2.cab: extends to Split-4.CAB (Split cabinet file 4/5)
+cabs/split-2.cab: extends to Split-5.CAB (Split cabinet file 5/5)
+Testing cabinet: cabs/split-2.cab
+  small1.bin  OK                               2ad5ba0f497f1e597ab187a2dfaa2e29
+  small2.bin  OK                               1f862f9e36a32a74202c1120b9f06af7
+  medium1.bin  OK                              0a7bd124a4c03a30329bd9ff06f71df7
+  medium2.bin  OK                              b4b0a02ad6a1170d4b3db18cec616fcc
+  small3.bin  OK                               bbaecacfeba976165e9d77bbecb0cbde
+  medium3.bin  OK                              b98fe17e8afbcf05aefc5b2c4badbc28
+
+All done, no errors.
+EOF
+
+"$cabextract" -t cabs/split-3.cab >$actual
+compare_with <<'EOF'
+cabs/split-3.cab: extends backwards to Split-2.CAB (Split cabinet file 2/5)
+cabs/split-3.cab: extends backwards to Split-1.CAB (Split cabinet file 1/5)
+cabs/split-3.cab: extends to Split-4.CAB (Split cabinet file 4/5)
+cabs/split-3.cab: extends to Split-5.CAB (Split cabinet file 5/5)
+Testing cabinet: cabs/split-3.cab
+  small1.bin  OK                               2ad5ba0f497f1e597ab187a2dfaa2e29
+  small2.bin  OK                               1f862f9e36a32a74202c1120b9f06af7
+  medium1.bin  OK                              0a7bd124a4c03a30329bd9ff06f71df7
+  medium2.bin  OK                              b4b0a02ad6a1170d4b3db18cec616fcc
+  small3.bin  OK                               bbaecacfeba976165e9d77bbecb0cbde
+  medium3.bin  OK                              b98fe17e8afbcf05aefc5b2c4badbc28
+
+All done, no errors.
+EOF
+
+"$cabextract" -t cabs/split-4.cab >$actual
+compare_with <<'EOF'
+cabs/split-4.cab: extends backwards to Split-3.CAB (Split cabinet file 3/5)
+cabs/split-4.cab: extends backwards to Split-2.CAB (Split cabinet file 2/5)
+cabs/split-4.cab: extends backwards to Split-1.CAB (Split cabinet file 1/5)
+cabs/split-4.cab: extends to Split-5.CAB (Split cabinet file 5/5)
+Testing cabinet: cabs/split-4.cab
+  small1.bin  OK                               2ad5ba0f497f1e597ab187a2dfaa2e29
+  small2.bin  OK                               1f862f9e36a32a74202c1120b9f06af7
+  medium1.bin  OK                              0a7bd124a4c03a30329bd9ff06f71df7
+  medium2.bin  OK                              b4b0a02ad6a1170d4b3db18cec616fcc
+  small3.bin  OK                               bbaecacfeba976165e9d77bbecb0cbde
+  medium3.bin  OK                              b98fe17e8afbcf05aefc5b2c4badbc28
+
+All done, no errors.
+EOF
+
+"$cabextract" -t cabs/split-5.cab >$actual
+compare_with <<'EOF'
+cabs/split-5.cab: extends backwards to Split-4.CAB (Split cabinet file 4/5)
+cabs/split-5.cab: extends backwards to Split-3.CAB (Split cabinet file 3/5)
+cabs/split-5.cab: extends backwards to Split-2.CAB (Split cabinet file 2/5)
+cabs/split-5.cab: extends backwards to Split-1.CAB (Split cabinet file 1/5)
+Testing cabinet: cabs/split-5.cab
+  small1.bin  OK                               2ad5ba0f497f1e597ab187a2dfaa2e29
+  small2.bin  OK                               1f862f9e36a32a74202c1120b9f06af7
+  medium1.bin  OK                              0a7bd124a4c03a30329bd9ff06f71df7
+  medium2.bin  OK                              b4b0a02ad6a1170d4b3db18cec616fcc
+  small3.bin  OK                               bbaecacfeba976165e9d77bbecb0cbde
+  medium3.bin  OK                              b98fe17e8afbcf05aefc5b2c4badbc28
+
+All done, no errors.
+EOF
+
+read status < $status && test "x$status" = xsuccess

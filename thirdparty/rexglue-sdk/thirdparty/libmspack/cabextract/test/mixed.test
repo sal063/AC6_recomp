@@ -1,0 +1,50 @@
+#!/bin/sh
+# test cabextract --filter and --pipe options
+. test/testcase
+
+"$cabextract" -p cabs/mixed.cab >$actual
+compare_with <<'EOF'
+If you can read this, the MSZIP decompressor is working!
+-----------------------------------------------------------------
+If you can read this, the LZX decompressor is working!
+-----------------------------------------------------------------
+If you can read this, the Quantum decompressor is working!
+EOF
+
+"$cabextract" -p -F 'mszip.*' cabs/mixed.cab >$actual
+compare_with <<'EOF'
+If you can read this, the MSZIP decompressor is working!
+EOF
+
+"$cabextract" -p -F '*zx*' cabs/mixed.cab >$actual
+compare_with <<'EOF'
+-----------------------------------------------------------------
+If you can read this, the LZX decompressor is working!
+-----------------------------------------------------------------
+EOF
+
+"$cabextract" -p -F '*m.txt'  cabs/mixed.cab >$actual
+compare_with <<'EOF'
+If you can read this, the Quantum decompressor is working!
+EOF
+
+# test multiple -F options
+"$cabextract" -p -F qtm.txt -F lzx.txt -F mszip.txt cabs/mixed.cab >$actual
+compare_with <<'EOF'
+If you can read this, the MSZIP decompressor is working!
+-----------------------------------------------------------------
+If you can read this, the LZX decompressor is working!
+-----------------------------------------------------------------
+If you can read this, the Quantum decompressor is working!
+EOF
+
+"$cabextract" -p -F '???.txt' -F mszip.txt cabs/mixed.cab >$actual
+compare_with <<'EOF'
+If you can read this, the MSZIP decompressor is working!
+-----------------------------------------------------------------
+If you can read this, the LZX decompressor is working!
+-----------------------------------------------------------------
+If you can read this, the Quantum decompressor is working!
+EOF
+
+read status < $status && test "x$status" = xsuccess

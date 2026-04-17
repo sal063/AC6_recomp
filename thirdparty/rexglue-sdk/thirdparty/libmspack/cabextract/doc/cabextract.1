@@ -1,0 +1,109 @@
+.TH CABEXTRACT 1 "March 7, 2018"
+.SH NAME
+cabextract \- program to extract files from Microsoft cabinet (.cab) archives
+.SH SYNOPSIS
+.B cabextract
+.RB [ -d \fIdir\fP ]
+.RB [ -e \fIencoding\fP ]
+.RB [ -f ]
+.RB [ -F \fIpattern\fP ]
+.RB [ -h ]
+.RB [ -i ]
+.RB [ -k ]
+.RB [ -l ]
+.RB [ -L ]
+.RB [ -n ]
+.RB [ -p ]
+.RB [ -q ]
+.RB [ -s ]
+.RB [ -t ]
+.RB [ -v ]
+.I " cabinet files" ...
+.SH DESCRIPTION
+.B cabextract
+is a program that un-archives files in the
+Microsoft cabinet file format (.cab) or any binary file which contains
+an embedded cabinet file (frequently found in .exe files).
+.PP
+.B cabextract
+will extract all files from all cabinet files specified on the command line.
+.PP
+To extract a multi\-part cabinet consisting of several
+files, only the
+.I first
+cabinet file needs to be given as an argument to
+.B cabextract
+as it will automatically look for the remaining files. To prevent
+.B cabextract
+from extracting cabinet files you did not specify, use the
+.B -s
+option.
+.SH OPTIONS
+A summary of options is included below.
+.TP
+.B \-d \fIdir\fP
+Extracts all files into the directory \fIdir\fP.
+.TP
+.B \-e \fIencoding\fP
+Specify the character encoding of filenames inside the cabinet files.
+This is only needed if you find cabinet files with garbled filenames;
+most software creates CAB files with either ASCII or UTF8 filenames.
+The list of supported encodings is given by the command "iconv \-l".
+.TP
+.B \-f
+Corrupted cabinet files will be 'fixed' to salvage whatever is possible from
+them. File entries with bad folders or names will be skipped rather than
+rejecting  the entire cabinet file. Impossible file lengths will be truncated
+to extract as much as possible, including when you're missing later files in
+a cabinet set. Corrupted MSZIP blocks and failed block checksums will be
+ignored.  Warnings will be printed if any of these conditions are met.
+.TP
+.B \-F \fIpattern\fP
+Only files with names that match the shell pattern \fIpattern\fP shall be
+listed, tested or extracted. On non-GNU systems, this match may be
+case-sensitive. Use the option repeatedly to supply more than one pattern.
+Files will be listed, tested or extracted if they match \fIany\fP pattern.
+.TP
+.B \-h
+Prints a page of help and exits.
+.TP
+.B \-i
+Prompts before overwriting files.
+.TP
+.B \-k
+Don't overwrite symlinks when extracting files.
+.TP
+.B \-l
+Lists the contents of the given cabinet files, rather than extracting them.
+.TP
+.B \-L
+When extracting cabinet files, makes each extracted file's name lowercase.
+.TP
+.B \-n
+Never overwrite existing files.
+.TP
+.B \-p
+Files shall be extracted to standard output.
+.TP
+.B \-q
+When extracting cabinet files, suppresses all messages except errors and
+warnings.
+.TP
+.B \-s
+When testing, listing or extracting cabinets which span multiple files,
+only cabinet files given on the command line shall be used.
+.TP
+.B \-t
+Tests the integrity of the cabinet. Files are decompressed, but not
+written to disk or standard output. If the file successfully decompresses,
+the MD5 checksum of the file is printed.
+.TP
+.B \-v
+If given alone on the command line, prints the version of
+.B cabextract
+and exits. Given with a list of cabinet files, it will list the contents
+of the cabinet files.
+.SH AUTHOR
+This manual page was written by Stuart Caie <kyzer@cabextract.org.uk>, based on
+the one written by Eric Sharkey <sharkey@debian.org>, for the Debian
+GNU/Linux system.

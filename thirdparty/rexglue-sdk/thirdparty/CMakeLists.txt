@@ -17,7 +17,7 @@ else()
 endif()
 
 #=============================================================================
-# Verify git submodules are initialized (only vendored ones)
+# Verify vendored dependencies are present
 #=============================================================================
 set(REQUIRED_SUBMODULES
     cli11
@@ -47,11 +47,16 @@ if(REXGLUE_BUILD_TESTS)
 endif()
 
 foreach(submodule ${REQUIRED_SUBMODULES})
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${submodule}/.git")
+    # This repo vendors third-party sources directly. Some upstream layouts use
+    # git submodules, but requiring a `${submodule}/.git` checkout breaks when
+    # dependencies are vendored as plain directories (for example, in source
+    # tarballs or monorepo mirrors).
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${submodule}")
         message(FATAL_ERROR
-            "Git submodule '${submodule}' is not initialized.\n"
-            "Please run: git submodule update --init --recursive\n"
-            "from the repository root directory."
+            "Required third-party dependency '${submodule}' is missing.\n"
+            "Expected directory: ${CMAKE_CURRENT_SOURCE_DIR}/${submodule}\n"
+            "If you cloned from git and this repo uses submodules in your fork,\n"
+            "run: git submodule update --init --recursive\n"
         )
     endif()
 endforeach()

@@ -86,11 +86,39 @@ void HashDrawRecord(uint64_t& hash, const ac6::d3d::DrawCallRecord& draw) {
     HashU32(hash, draw.shadow_state.viewport.height);
 }
 
+// D3DPRIMITIVETYPE (D3D9); used by DrawIndexed* and DrawPrimitive.
+void IncrementTopologyHistogram(ac6::d3d::FrameCaptureSummary& summary, uint32_t primitive_type) {
+    switch (primitive_type) {
+        case 1:
+            ++summary.topology_pointlist;
+            break;
+        case 2:
+            ++summary.topology_linelist;
+            break;
+        case 3:
+            ++summary.topology_linestrip;
+            break;
+        case 4:
+            ++summary.topology_trianglelist;
+            break;
+        case 5:
+            ++summary.topology_trianglestrip;
+            break;
+        case 6:
+            ++summary.topology_trianglefan;
+            break;
+        default:
+            ++summary.topology_other;
+            break;
+    }
+}
+
 ac6::d3d::FrameCaptureSummary MakeFrameCaptureSummary(
     const ac6::d3d::FrameCaptureSnapshot& frame_capture) {
     ac6::d3d::FrameCaptureSummary summary;
     summary.capture_enabled = REXCVAR_GET(ac6_render_capture);
     summary.frame_index = frame_capture.frame_index;
+    summary.frame_stats = frame_capture.stats;
     summary.draw_count = static_cast<uint32_t>(frame_capture.draws.size());
     summary.clear_count = static_cast<uint32_t>(frame_capture.clears.size());
     summary.resolve_count = static_cast<uint32_t>(frame_capture.resolves.size());
@@ -132,6 +160,7 @@ ac6::d3d::FrameCaptureSummary MakeFrameCaptureSummary(
                     ++summary.primitive_draw_count;
                     break;
             }
+            IncrementTopologyHistogram(summary, draw.primitive_type);
             uint32_t rt0 = draw.shadow_state.render_targets[0];
             if (std::find(unique_rt0s.begin(), unique_rt0s.end(), rt0) == unique_rt0s.end()) {
                 unique_rt0s.push_back(rt0);

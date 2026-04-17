@@ -169,6 +169,16 @@ struct FrameCaptureSummary {
     uint32_t indexed_draw_count{0};
     uint32_t indexed_shared_draw_count{0};
     uint32_t primitive_draw_count{0};
+    /// Per-frame guest D3D draw counters (same window as this capture; cleared each frame boundary).
+    DrawStatsSnapshot frame_stats{};
+    /// Histogram of `primitive_type` on all captured draws (D3DPRIMITIVETYPE: 1=point list … 6=fan).
+    uint32_t topology_pointlist{0};
+    uint32_t topology_linelist{0};
+    uint32_t topology_linestrip{0};
+    uint32_t topology_trianglelist{0};
+    uint32_t topology_trianglestrip{0};
+    uint32_t topology_trianglefan{0};
+    uint32_t topology_other{0};
     uint32_t unique_rt0_count{0};
     uint32_t rt0_switch_count{0};
     uint32_t frame_end_render_target_count{0};

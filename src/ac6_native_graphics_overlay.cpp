@@ -43,6 +43,25 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
   ImGui::Text("capture draws/clears/resolves: %u / %u / %u",
               status.capture_summary.draw_count, status.capture_summary.clear_count,
               status.capture_summary.resolve_count);
+  ImGui::Separator();
+  ImGui::TextUnformatted("guest draw counts (this frame, pre-reset):");
+  ImGui::Text("  indexed / shared / primitive: %u / %u / %u",
+              status.capture_summary.frame_stats.draw_calls_indexed,
+              status.capture_summary.frame_stats.draw_calls_indexed_shared,
+              status.capture_summary.frame_stats.draw_calls_primitive);
+  ImGui::Text("  set_sampler / set_texture_fetch: %u / %u",
+              status.capture_summary.frame_stats.set_sampler_state_calls,
+              status.capture_summary.frame_stats.set_texture_fetch_calls);
+  ImGui::TextUnformatted("primitive topology (D3D9 type, all draws):");
+  ImGui::Text("  point %u  line %u  strip %u  tri %u  triStrip %u  fan %u  other %u",
+              status.capture_summary.topology_pointlist, status.capture_summary.topology_linelist,
+              status.capture_summary.topology_linestrip, status.capture_summary.topology_trianglelist,
+              status.capture_summary.topology_trianglestrip, status.capture_summary.topology_trianglefan,
+              status.capture_summary.topology_other);
+  ImGui::Text("last draw: prim_type=%u count=%u flags=0x%X",
+              status.capture_summary.last_draw_primitive_type, status.capture_summary.last_draw_count,
+              status.capture_summary.last_draw_flags);
+  ImGui::Separator();
   ImGui::Text("planned output: %ux%u", status.frame_plan.output_width,
               status.frame_plan.output_height);
   ImGui::Text("stages scene/post/ui: %s / %s / %s",

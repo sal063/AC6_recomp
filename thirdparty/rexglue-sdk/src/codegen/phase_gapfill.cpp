@@ -196,13 +196,28 @@ void cleanupAbsorbedGapFills(CodegenContext& ctx) {
         continue;
 
       // This GAP_FILL is inside another function's blocks
-      if (otherNode->authority() != FunctionAuthority::GAP_FILL) {
-        // Absorbed by higher authority - remove
+      if (otherNode->authority() != FunctionAuthority::GAP_FILL || otherAddr < addr) {
+        // Absorbed by higher authority or lower-address GAP_FILL - remove it, but merge first
         toRemove.push_back(addr);
-        break;
-      } else if (otherAddr < addr) {
-        // Both GAP_FILL, other has lower address - it survives
-        toRemove.push_back(addr);
+
+        for (const auto& block : node->blocks()) {
+          graph.addBlockToFunction(otherAddr, block);
+        }
+        for (auto label : node->labels()) {
+          graph.addLabelToFunction(otherAddr, label);
+        }
+        for (const auto& call : node->calls()) {
+          graph.addCallToFunction(otherAddr, call.site, call.target);
+        }
+        for (const auto& call : node->tailCalls()) {
+          graph.addTailCallToFunction(otherAddr, call.site, call.target);
+        }
+        for (const auto& jt : node->jumpTables()) {
+          graph.addJumpTableToFunction(otherAddr, jt);
+        }
+        for (const auto& jump : node->unresolvedJumps()) {
+          graph.addUnresolvedJumpToFunction(otherAddr, jump.site, jump.target, jump.isCall, jump.isConditional);
+        }
         break;
       }
     }

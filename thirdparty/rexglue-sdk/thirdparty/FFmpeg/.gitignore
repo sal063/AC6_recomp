@@ -30,7 +30,8 @@
 /ffplay
 /ffprobe
 /config.asm
-/config.h
+# ReXGlue vendors a pre-generated FFmpeg config header for deterministic builds.
+!/config.h
 /coverage.info
 /avversion.h
 /lcov/

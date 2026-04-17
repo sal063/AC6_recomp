@@ -1,5 +1,6 @@
 #include "render_hooks.h"
 #include "d3d_hooks.h"
+#include "ac6_native_graphics.h"
 
 #include <chrono>
 #include <mutex>
@@ -47,6 +48,7 @@ void ac6DeltaDivisorHook(PPCRegister& r29) {
 
 void ac6PresentTimingHook(PPCRegister& /*r31*/) {
     ac6::d3d::OnFrameBoundary();
+    ac6::graphics::OnFrameBoundary();
 
     const auto now = Clock::now();
     double frame_time_ms = 0.0;

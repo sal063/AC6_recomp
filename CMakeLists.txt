@@ -9,11 +9,17 @@ project(ac6recomp LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-include(generated/rexglue.cmake)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/rexglue.cmake")
+    include(generated/rexglue.cmake)
+else()
+    include(cmake/rexglue_bootstrap.cmake)
+endif()
 
 # Sources
 set(AC6RECOMP_SOURCES
     src/main.cpp
+    src/d3d_hooks.cpp
+    src/render_hooks.cpp
     src/ac6_native_graphics.cpp
     src/ac6_native_graphics_overlay.cpp
     src/ac6_native_renderer/ac6_render_frontend.cpp

@@ -15,6 +15,7 @@ class NativeGraphicsStatusDialog final : public rex::ui::ImGuiDialog {
   explicit NativeGraphicsStatusDialog(rex::ui::ImGuiDrawer* imgui_drawer);
   ~NativeGraphicsStatusDialog();
 
+  void Show() { visible_ = true; }
   void ToggleVisible() { visible_ = !visible_; }
   bool IsVisible() const { return visible_; }
 

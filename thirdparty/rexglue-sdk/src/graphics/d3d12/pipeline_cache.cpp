@@ -1087,17 +1087,9 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
       case Shader::HostVertexShaderType::kQuadDomainPatchIndexed:
         host_shader_type = "patch-indexed quad domain";
         break;
-      case Shader::HostVertexShaderType::kVertex:
-        host_shader_type = "vertex";
-        break;
-      case Shader::HostVertexShaderType::kPointListAsTriangleStrip:
-        host_shader_type = "vertex (point list expanded to strip)";
-        break;
-      case Shader::HostVertexShaderType::kRectangleListAsTriangleStrip:
-        host_shader_type = "vertex (rectangle list expanded to strip)";
-        break;
       default:
-        assert_unhandled_case(modification.vertex.host_vertex_shader_type);
+        assert(modification.vertex.host_vertex_shader_type ==
+               Shader::HostVertexShaderType::kVertex);
         host_shader_type = "vertex";
     }
   } else {
@@ -2805,12 +2797,8 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
     state_desc.DS.pShaderBytecode = runtime_description.vertex_shader->translated_binary().data();
     state_desc.DS.BytecodeLength = runtime_description.vertex_shader->translated_binary().size();
   } else {
-    const bool host_vs_is_translated_vertex_blob =
-        host_vertex_shader_type == Shader::HostVertexShaderType::kVertex ||
-        host_vertex_shader_type == Shader::HostVertexShaderType::kPointListAsTriangleStrip ||
-        host_vertex_shader_type == Shader::HostVertexShaderType::kRectangleListAsTriangleStrip;
-    assert_true(host_vs_is_translated_vertex_blob);
-    if (!host_vs_is_translated_vertex_blob) {
+    assert_true(host_vertex_shader_type == Shader::HostVertexShaderType::kVertex);
+    if (host_vertex_shader_type != Shader::HostVertexShaderType::kVertex) {
       // Fallback vertex shaders are not needed on Direct3D 12.
       return nullptr;
     }

@@ -37,6 +37,10 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
               static_cast<unsigned long long>(status.renderer_stats.frame_count));
   ImGui::Text("render passes built: %llu",
               static_cast<unsigned long long>(status.renderer_stats.built_pass_count));
+  ImGui::Text("frontend passes/commands: %u / %u", status.frontend_summary.pass_count,
+              status.frontend_summary.total_command_count);
+  ImGui::Text("replay passes/commands: %u / %u", status.replay_summary.pass_count,
+              status.replay_summary.command_count);
   ImGui::Separator();
   ImGui::Text("capture frame: %llu",
               static_cast<unsigned long long>(status.capture_summary.frame_index));
@@ -64,6 +68,9 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
   ImGui::Separator();
   ImGui::Text("planned output: %ux%u", status.frame_plan.output_width,
               status.frame_plan.output_height);
+  ImGui::Text("replay output/present: %ux%u / %s", status.replay_summary.output_width,
+              status.replay_summary.output_height,
+              status.replay_summary.has_present_pass ? "yes" : "no");
   ImGui::Text("stages scene/post/ui: %s / %s / %s",
               status.frame_plan.has_scene_stage ? "yes" : "no",
               status.frame_plan.has_post_process_stage ? "yes" : "no",

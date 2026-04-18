@@ -21,10 +21,21 @@ RenderPassKind ToRenderPassKind(ObservedPassKind kind) {
   }
 }
 
-std::string BuildObservedPassName(const ObservedPassDesc& pass,
-                                  uint32_t pass_index) {
-  return "ac6.observed." + std::string(ToString(pass.kind)) + "." +
-         std::to_string(pass_index);
+RenderPassKind ToRenderPassKind(ReplayPassRole role) {
+  switch (role) {
+    case ReplayPassRole::kScene:
+      return RenderPassKind::kScene;
+    case ReplayPassRole::kPostProcess:
+    case ReplayPassRole::kPresent:
+      return RenderPassKind::kPostProcess;
+    case ReplayPassRole::kUiComposite:
+      return RenderPassKind::kUiComposite;
+    case ReplayPassRole::kBootstrap:
+      return RenderPassKind::kBootstrap;
+    case ReplayPassRole::kUnknown:
+    default:
+      return RenderPassKind::kUnknown;
+  }
 }
 
 }  // namespace
@@ -58,6 +69,7 @@ void NativeRenderer::Shutdown() {
   graph_.Reset();
   frontend_.Reset();
   frame_plan_ = {};
+  replay_frame_ = {};
   stats_ = {};
 }
 
@@ -76,14 +88,25 @@ void NativeRenderer::BuildBootstrapFrame() {
   }
 
   frame_plan_ = {};
+  replay_frame_ = replay_builder_.BuildBootstrapFrame(scheduler_.frame_index());
 
   // Phase-1: do not present. Build a minimal graph to prove deterministic
   // ownership without touching Rexglue emulation paths.
-  graph_.AddPass(RenderPassDesc{
-      .name = "ac6.native.bootstrap",
-      .kind = RenderPassKind::kBootstrap,
-      .async_compute = false,
-  });
+  for (const ReplayPassDesc& pass : replay_frame_.passes) {
+    graph_.AddPass(RenderPassDesc{
+        .name = pass.name,
+        .kind = ToRenderPassKind(pass.role),
+        .async_compute = false,
+        .draw_count = pass.draw_count,
+        .clear_count = pass.clear_count,
+        .resolve_count = pass.resolve_count,
+        .render_target_0 = pass.render_target_0,
+        .depth_stencil = pass.depth_stencil,
+        .viewport_width = pass.viewport_width,
+        .viewport_height = pass.viewport_height,
+        .selected_for_present = pass.selected_for_present,
+    });
+  }
   stats_.built_pass_count += graph_.pass_count();
 
   REXLOG_TRACE("AC6 native renderer bootstrap frame built passes={}",
@@ -103,12 +126,12 @@ void NativeRenderer::BuildCapturedFrame(
   }
 
   frame_plan_ = planner_.Build(summary, frontend_.passes());
+  replay_frame_ = replay_builder_.Build(summary, frontend_.passes(), frame_plan_);
 
-  uint32_t pass_index = 0;
-  for (const ObservedPassDesc& pass : frontend_.passes()) {
+  for (const ReplayPassDesc& pass : replay_frame_.passes) {
     graph_.AddPass(RenderPassDesc{
-        .name = BuildObservedPassName(pass, pass_index++),
-        .kind = ToRenderPassKind(pass.kind),
+        .name = pass.name,
+        .kind = ToRenderPassKind(pass.role),
         .async_compute = false,
         .draw_count = pass.draw_count,
         .clear_count = pass.clear_count,
@@ -120,26 +143,12 @@ void NativeRenderer::BuildCapturedFrame(
         .selected_for_present = pass.selected_for_present,
     });
   }
-  if (frame_plan_.valid && frame_plan_.requires_present_pass) {
-    graph_.AddPass(RenderPassDesc{
-        .name = "ac6.plan.present",
-        .kind = RenderPassKind::kPostProcess,
-        .async_compute = false,
-        .draw_count = 0,
-        .clear_count = 0,
-        .resolve_count = 0,
-        .render_target_0 = frame_plan_.present_stage.render_target_0,
-        .depth_stencil = frame_plan_.present_stage.depth_stencil,
-        .viewport_width = frame_plan_.output_width,
-        .viewport_height = frame_plan_.output_height,
-        .selected_for_present = true,
-    });
-  }
 
   stats_.built_pass_count += graph_.pass_count();
   REXLOG_TRACE(
-      "AC6 native renderer observed frame={} passes={} selected={} draws={} clears={} resolves={} plan_valid={} out={}x{}",
-      summary.frame_index, summary.pass_count, summary.selected_pass_index,
+      "AC6 native renderer observed frame={} frontend_passes={} replay_passes={} replay_commands={} selected={} draws={} clears={} resolves={} plan_valid={} out={}x{}",
+      summary.frame_index, summary.pass_count, replay_frame_.summary.pass_count,
+      replay_frame_.summary.command_count, summary.selected_pass_index,
       summary.total_draw_count, summary.total_clear_count,
       summary.total_resolve_count, frame_plan_.valid, frame_plan_.output_width,
       frame_plan_.output_height);

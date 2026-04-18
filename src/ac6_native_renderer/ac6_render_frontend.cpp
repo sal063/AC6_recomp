@@ -48,8 +48,73 @@ enum class CapturedFrameEventType : uint8_t {
 struct CapturedFrameEvent {
   uint32_t sequence = 0;
   CapturedFrameEventType type = CapturedFrameEventType::kDraw;
+  const ac6::d3d::DrawCallRecord* draw = nullptr;
+  const ac6::d3d::ClearRecord* clear = nullptr;
+  const ac6::d3d::ResolveRecord* resolve = nullptr;
   const ac6::d3d::ShadowState* shadow_state = nullptr;
 };
+
+ObservedCommandDesc MakeObservedCommand(const ac6::d3d::DrawCallRecord& draw) {
+  return ObservedCommandDesc{
+      .type = ObservedCommandType::kDraw,
+      .sequence = draw.sequence,
+      .draw_kind = draw.kind,
+      .primitive_type = draw.primitive_type,
+      .start = draw.start,
+      .count = draw.count,
+      .flags = draw.flags,
+      .texture_count = CountNonZeroEntries(draw.shadow_state.textures),
+      .stream_count = CountBoundStreams(draw.shadow_state.streams),
+      .sampler_count = CountBoundSamplers(draw.shadow_state.samplers),
+      .fetch_constant_count = CountNonZeroEntries(draw.shadow_state.texture_fetch_ptrs),
+      .render_target_0 = draw.shadow_state.render_targets[0],
+      .depth_stencil = draw.shadow_state.depth_stencil,
+      .viewport_x = draw.shadow_state.viewport.x,
+      .viewport_y = draw.shadow_state.viewport.y,
+      .viewport_width = draw.shadow_state.viewport.width,
+      .viewport_height = draw.shadow_state.viewport.height,
+  };
+}
+
+ObservedCommandDesc MakeObservedCommand(const ac6::d3d::ClearRecord& clear) {
+  return ObservedCommandDesc{
+      .type = ObservedCommandType::kClear,
+      .sequence = clear.sequence,
+      .rect_count = clear.rect_count,
+      .captured_rect_count = clear.captured_rect_count,
+      .flags = clear.flags,
+      .color = clear.color,
+      .stencil = clear.stencil,
+      .depth = clear.depth,
+      .texture_count = CountNonZeroEntries(clear.shadow_state.textures),
+      .stream_count = CountBoundStreams(clear.shadow_state.streams),
+      .sampler_count = CountBoundSamplers(clear.shadow_state.samplers),
+      .fetch_constant_count = CountNonZeroEntries(clear.shadow_state.texture_fetch_ptrs),
+      .render_target_0 = clear.shadow_state.render_targets[0],
+      .depth_stencil = clear.shadow_state.depth_stencil,
+      .viewport_x = clear.shadow_state.viewport.x,
+      .viewport_y = clear.shadow_state.viewport.y,
+      .viewport_width = clear.shadow_state.viewport.width,
+      .viewport_height = clear.shadow_state.viewport.height,
+  };
+}
+
+ObservedCommandDesc MakeObservedCommand(const ac6::d3d::ResolveRecord& resolve) {
+  return ObservedCommandDesc{
+      .type = ObservedCommandType::kResolve,
+      .sequence = resolve.sequence,
+      .texture_count = CountNonZeroEntries(resolve.shadow_state.textures),
+      .stream_count = CountBoundStreams(resolve.shadow_state.streams),
+      .sampler_count = CountBoundSamplers(resolve.shadow_state.samplers),
+      .fetch_constant_count = CountNonZeroEntries(resolve.shadow_state.texture_fetch_ptrs),
+      .render_target_0 = resolve.shadow_state.render_targets[0],
+      .depth_stencil = resolve.shadow_state.depth_stencil,
+      .viewport_x = resolve.shadow_state.viewport.x,
+      .viewport_y = resolve.shadow_state.viewport.y,
+      .viewport_width = resolve.shadow_state.viewport.width,
+      .viewport_height = resolve.shadow_state.viewport.height,
+  };
+}
 
 bool SamePassBinding(const ac6::d3d::ShadowState& left,
                      const ac6::d3d::ShadowState& right) {
@@ -121,6 +186,19 @@ const char* ToString(ObservedPassKind kind) {
   }
 }
 
+const char* ToString(ObservedCommandType type) {
+  switch (type) {
+    case ObservedCommandType::kDraw:
+      return "draw";
+    case ObservedCommandType::kClear:
+      return "clear";
+    case ObservedCommandType::kResolve:
+      return "resolve";
+    default:
+      return "unknown";
+  }
+}
+
 void Ac6RenderFrontend::Reset() {
   summary_ = {};
   passes_.clear();
@@ -143,18 +221,18 @@ FrontendFrameSummary Ac6RenderFrontend::BuildFromCapture(
                  frame_capture.resolves.size());
 
   for (const auto& draw : frame_capture.draws) {
-    events.push_back({draw.sequence, CapturedFrameEventType::kDraw,
-                      &draw.shadow_state});
+    events.push_back({draw.sequence, CapturedFrameEventType::kDraw, &draw, nullptr,
+                      nullptr, &draw.shadow_state});
     ++summary_.total_draw_count;
   }
   for (const auto& clear : frame_capture.clears) {
-    events.push_back({clear.sequence, CapturedFrameEventType::kClear,
-                      &clear.shadow_state});
+    events.push_back({clear.sequence, CapturedFrameEventType::kClear, nullptr, &clear,
+                      nullptr, &clear.shadow_state});
     ++summary_.total_clear_count;
   }
   for (const auto& resolve : frame_capture.resolves) {
-    events.push_back({resolve.sequence, CapturedFrameEventType::kResolve,
-                      &resolve.shadow_state});
+    events.push_back({resolve.sequence, CapturedFrameEventType::kResolve, nullptr, nullptr,
+                      &resolve, &resolve.shadow_state});
     ++summary_.total_resolve_count;
   }
 
@@ -198,6 +276,10 @@ FrontendFrameSummary Ac6RenderFrontend::BuildFromCapture(
     switch (event.type) {
       case CapturedFrameEventType::kDraw:
         ++current_pass.draw_count;
+        if (event.draw != nullptr) {
+          current_pass.commands.push_back(MakeObservedCommand(*event.draw));
+          ++summary_.total_command_count;
+        }
         if (event.shadow_state != nullptr) {
           current_pass.max_texture_count = std::max(
               current_pass.max_texture_count,
@@ -215,9 +297,17 @@ FrontendFrameSummary Ac6RenderFrontend::BuildFromCapture(
         break;
       case CapturedFrameEventType::kClear:
         ++current_pass.clear_count;
+        if (event.clear != nullptr) {
+          current_pass.commands.push_back(MakeObservedCommand(*event.clear));
+          ++summary_.total_command_count;
+        }
         break;
       case CapturedFrameEventType::kResolve:
         ++current_pass.resolve_count;
+        if (event.resolve != nullptr) {
+          current_pass.commands.push_back(MakeObservedCommand(*event.resolve));
+          ++summary_.total_command_count;
+        }
         break;
     }
   }

@@ -24,6 +24,7 @@ set(AC6RECOMP_SOURCES
     src/ac6_native_graphics_overlay.cpp
     src/ac6_native_renderer/ac6_render_frontend.cpp
     src/ac6_native_renderer/frame_plan.cpp
+    src/ac6_native_renderer/replay_ir.cpp
     src/ac6_native_renderer/backends/backend_factory.cpp
     src/ac6_native_renderer/backends/d3d12_backend.cpp
     src/ac6_native_renderer/backends/metal_backend.cpp

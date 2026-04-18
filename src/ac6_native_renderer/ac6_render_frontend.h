@@ -14,6 +14,37 @@ enum class ObservedPassKind : uint8_t {
   kUiComposite = 3,
 };
 
+enum class ObservedCommandType : uint8_t {
+  kDraw = 0,
+  kClear = 1,
+  kResolve = 2,
+};
+
+struct ObservedCommandDesc {
+  ObservedCommandType type = ObservedCommandType::kDraw;
+  uint32_t sequence = 0;
+  ac6::d3d::DrawCallKind draw_kind = ac6::d3d::DrawCallKind::kIndexed;
+  uint32_t primitive_type = 0;
+  uint32_t start = 0;
+  uint32_t count = 0;
+  uint32_t flags = 0;
+  uint32_t rect_count = 0;
+  uint32_t captured_rect_count = 0;
+  uint32_t color = 0;
+  uint32_t stencil = 0;
+  float depth = 1.0f;
+  uint32_t texture_count = 0;
+  uint32_t stream_count = 0;
+  uint32_t sampler_count = 0;
+  uint32_t fetch_constant_count = 0;
+  uint32_t render_target_0 = 0;
+  uint32_t depth_stencil = 0;
+  uint32_t viewport_x = 0;
+  uint32_t viewport_y = 0;
+  uint32_t viewport_width = 0;
+  uint32_t viewport_height = 0;
+};
+
 struct ObservedPassDesc {
   ObservedPassKind kind = ObservedPassKind::kUnknown;
   uint32_t start_sequence = 0;
@@ -37,12 +68,14 @@ struct ObservedPassDesc {
   uint32_t viewport_height = 0;
   bool selected_for_present = false;
   bool matches_frame_end_viewport = false;
+  std::vector<ObservedCommandDesc> commands;
 };
 
 struct FrontendFrameSummary {
   bool capture_valid = false;
   uint64_t frame_index = 0;
   uint32_t pass_count = 0;
+  uint32_t total_command_count = 0;
   uint32_t scene_pass_count = 0;
   uint32_t post_process_pass_count = 0;
   uint32_t ui_pass_count = 0;
@@ -66,5 +99,6 @@ class Ac6RenderFrontend {
 };
 
 const char* ToString(ObservedPassKind kind);
+const char* ToString(ObservedCommandType type);
 
 }  // namespace ac6::renderer

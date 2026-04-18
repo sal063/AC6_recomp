@@ -7,20 +7,6 @@
 namespace ac6::renderer {
 namespace {
 
-RenderPassKind ToRenderPassKind(ObservedPassKind kind) {
-  switch (kind) {
-    case ObservedPassKind::kScene:
-      return RenderPassKind::kScene;
-    case ObservedPassKind::kPostProcess:
-      return RenderPassKind::kPostProcess;
-    case ObservedPassKind::kUiComposite:
-      return RenderPassKind::kUiComposite;
-    case ObservedPassKind::kUnknown:
-    default:
-      return RenderPassKind::kUnknown;
-  }
-}
-
 RenderPassKind ToRenderPassKind(ReplayPassRole role) {
   switch (role) {
     case ReplayPassRole::kScene:
@@ -36,6 +22,22 @@ RenderPassKind ToRenderPassKind(ReplayPassRole role) {
     default:
       return RenderPassKind::kUnknown;
   }
+}
+
+RenderPassDesc BuildRenderPassDesc(const ReplayExecutorPassPacket& pass) {
+  return RenderPassDesc{
+      .name = pass.name,
+      .kind = ToRenderPassKind(pass.role),
+      .async_compute = false,
+      .draw_count = pass.draw_count,
+      .clear_count = pass.clear_count,
+      .resolve_count = pass.resolve_count,
+      .render_target_0 = pass.render_target_0,
+      .depth_stencil = pass.depth_stencil,
+      .viewport_width = pass.output_width,
+      .viewport_height = pass.output_height,
+      .selected_for_present = pass.selected_for_present,
+  };
 }
 
 }  // namespace
@@ -70,6 +72,8 @@ void NativeRenderer::Shutdown() {
   frontend_.Reset();
   frame_plan_ = {};
   replay_frame_ = {};
+  execution_plan_ = {};
+  executor_frame_ = {};
   stats_ = {};
 }
 
@@ -89,23 +93,13 @@ void NativeRenderer::BuildBootstrapFrame() {
 
   frame_plan_ = {};
   replay_frame_ = replay_builder_.BuildBootstrapFrame(scheduler_.frame_index());
+  execution_plan_ = execution_builder_.BuildBootstrapPlan(scheduler_.frame_index());
+  executor_frame_ = executor_builder_.BuildBootstrapFrame(scheduler_.frame_index());
 
   // Phase-1: do not present. Build a minimal graph to prove deterministic
   // ownership without touching Rexglue emulation paths.
-  for (const ReplayPassDesc& pass : replay_frame_.passes) {
-    graph_.AddPass(RenderPassDesc{
-        .name = pass.name,
-        .kind = ToRenderPassKind(pass.role),
-        .async_compute = false,
-        .draw_count = pass.draw_count,
-        .clear_count = pass.clear_count,
-        .resolve_count = pass.resolve_count,
-        .render_target_0 = pass.render_target_0,
-        .depth_stencil = pass.depth_stencil,
-        .viewport_width = pass.viewport_width,
-        .viewport_height = pass.viewport_height,
-        .selected_for_present = pass.selected_for_present,
-    });
+  for (const ReplayExecutorPassPacket& pass : executor_frame_.passes) {
+    graph_.AddPass(BuildRenderPassDesc(pass));
   }
   stats_.built_pass_count += graph_.pass_count();
 
@@ -127,28 +121,20 @@ void NativeRenderer::BuildCapturedFrame(
 
   frame_plan_ = planner_.Build(summary, frontend_.passes());
   replay_frame_ = replay_builder_.Build(summary, frontend_.passes(), frame_plan_);
+  execution_plan_ = execution_builder_.Build(replay_frame_, frame_plan_);
+  executor_frame_ = executor_builder_.Build(execution_plan_);
 
-  for (const ReplayPassDesc& pass : replay_frame_.passes) {
-    graph_.AddPass(RenderPassDesc{
-        .name = pass.name,
-        .kind = ToRenderPassKind(pass.role),
-        .async_compute = false,
-        .draw_count = pass.draw_count,
-        .clear_count = pass.clear_count,
-        .resolve_count = pass.resolve_count,
-        .render_target_0 = pass.render_target_0,
-        .depth_stencil = pass.depth_stencil,
-        .viewport_width = pass.viewport_width,
-        .viewport_height = pass.viewport_height,
-        .selected_for_present = pass.selected_for_present,
-    });
+  for (const ReplayExecutorPassPacket& pass : executor_frame_.passes) {
+    graph_.AddPass(BuildRenderPassDesc(pass));
   }
 
   stats_.built_pass_count += graph_.pass_count();
   REXLOG_TRACE(
-      "AC6 native renderer observed frame={} frontend_passes={} replay_passes={} replay_commands={} selected={} draws={} clears={} resolves={} plan_valid={} out={}x{}",
+      "AC6 native renderer observed frame={} frontend_passes={} replay_passes={} replay_commands={} execution_passes={} execution_commands={} executor_passes={} executor_commands={} selected={} draws={} clears={} resolves={} plan_valid={} out={}x{}",
       summary.frame_index, summary.pass_count, replay_frame_.summary.pass_count,
-      replay_frame_.summary.command_count, summary.selected_pass_index,
+      replay_frame_.summary.command_count, execution_plan_.summary.pass_count,
+      execution_plan_.summary.command_count, executor_frame_.summary.pass_count,
+      executor_frame_.summary.command_count, summary.selected_pass_index,
       summary.total_draw_count, summary.total_clear_count,
       summary.total_resolve_count, frame_plan_.valid, frame_plan_.output_width,
       frame_plan_.output_height);

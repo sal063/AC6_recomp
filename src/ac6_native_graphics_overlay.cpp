@@ -41,6 +41,10 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
               status.frontend_summary.total_command_count);
   ImGui::Text("replay passes/commands: %u / %u", status.replay_summary.pass_count,
               status.replay_summary.command_count);
+  ImGui::Text("execution passes/commands: %u / %u",
+              status.execution_summary.pass_count, status.execution_summary.command_count);
+  ImGui::Text("executor passes/commands: %u / %u",
+              status.executor_summary.pass_count, status.executor_summary.command_count);
   ImGui::Separator();
   ImGui::Text("capture frame: %llu",
               static_cast<unsigned long long>(status.capture_summary.frame_index));
@@ -71,6 +75,16 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
   ImGui::Text("replay output/present: %ux%u / %s", status.replay_summary.output_width,
               status.replay_summary.output_height,
               status.replay_summary.has_present_pass ? "yes" : "no");
+  ImGui::Text("execution output/present: %ux%u / %s",
+              status.execution_summary.output_width, status.execution_summary.output_height,
+              status.execution_summary.has_present_pass ? "yes" : "no");
+  ImGui::Text("executor output/present: %ux%u / %s",
+              status.executor_summary.output_width, status.executor_summary.output_height,
+              status.executor_summary.has_present_pass ? "yes" : "no");
+  ImGui::Text("executor graphics/present/resource: %u / %u / %u",
+              status.executor_summary.graphics_pass_count,
+              status.executor_summary.present_pass_count,
+              status.executor_summary.resource_translation_pass_count);
   ImGui::Text("stages scene/post/ui: %s / %s / %s",
               status.frame_plan.has_scene_stage ? "yes" : "no",
               status.frame_plan.has_post_process_stage ? "yes" : "no",

@@ -3,8 +3,10 @@
 #include <cstdint>
 
 #include "ac6_native_renderer/ac6_render_frontend.h"
+#include "ac6_native_renderer/execution_plan.h"
 #include "ac6_native_renderer/frame_plan.h"
 #include "ac6_native_renderer/replay_ir.h"
+#include "ac6_native_renderer/replay_executor.h"
 #include "ac6_native_renderer/types.h"
 #include "d3d_state.h"
 
@@ -23,6 +25,8 @@ struct NativeGraphicsRuntimeStatus {
   ac6::renderer::NativeRendererStats renderer_stats{};
   ac6::renderer::FrontendFrameSummary frontend_summary{};
   ac6::renderer::ReplayFrameSummary replay_summary{};
+  ac6::renderer::ExecutionFrameSummary execution_summary{};
+  ac6::renderer::ReplayExecutorFrameSummary executor_summary{};
   ac6::d3d::FrameCaptureSummary capture_summary{};
   ac6::renderer::NativeFramePlan frame_plan{};
 };

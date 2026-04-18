@@ -3,9 +3,11 @@
 #include <memory>
 
 #include "ac6_render_frontend.h"
+#include "execution_plan.h"
 #include "frame_scheduler.h"
 #include "frame_plan.h"
 #include "replay_ir.h"
+#include "replay_executor.h"
 #include "render_device.h"
 #include "render_graph.h"
 #include "types.h"
@@ -38,6 +40,10 @@ class NativeRenderer {
   NativeFramePlan frame_plan() const { return frame_plan_; }
   ReplayFrameSummary replay_summary() const { return replay_frame_.summary; }
   const ReplayFrame& replay_frame() const { return replay_frame_; }
+  ExecutionFrameSummary execution_summary() const { return execution_plan_.summary; }
+  const ExecutionFramePlan& execution_plan() const { return execution_plan_; }
+  ReplayExecutorFrameSummary executor_summary() const { return executor_frame_.summary; }
+  const ReplayExecutorFrame& executor_frame() const { return executor_frame_; }
 
  private:
   NativeRendererConfig config_{};
@@ -48,8 +54,12 @@ class NativeRenderer {
   Ac6RenderFrontend frontend_{};
   FramePlanner planner_{};
   ReplayIrBuilder replay_builder_{};
+  ExecutionPlanBuilder execution_builder_{};
+  ReplayExecutorPlanBuilder executor_builder_{};
   NativeFramePlan frame_plan_{};
   ReplayFrame replay_frame_{};
+  ExecutionFramePlan execution_plan_{};
+  ReplayExecutorFrame executor_frame_{};
 };
 
 }  // namespace ac6::renderer

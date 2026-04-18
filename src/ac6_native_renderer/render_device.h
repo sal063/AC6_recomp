@@ -3,6 +3,7 @@
 #include <memory>
 #include <string_view>
 
+#include "replay_executor.h"
 #include "types.h"
 
 namespace ac6::renderer {
@@ -15,6 +16,8 @@ class RenderDeviceBackend {
   virtual std::string_view GetName() const = 0;
   virtual bool IsSupported() const = 0;
   virtual bool Initialize(const NativeRendererConfig& config) = 0;
+  virtual bool SubmitExecutorFrame(const ReplayExecutorFrame& frame) = 0;
+  virtual BackendExecutorStatus GetExecutorStatus() const = 0;
   virtual void Shutdown() = 0;
 };
 
@@ -28,10 +31,12 @@ class RenderDevice {
 
   bool Initialize(const NativeRendererConfig& config);
   void Shutdown();
+  bool SubmitExecutorFrame(const ReplayExecutorFrame& frame);
 
   bool initialized() const { return initialized_; }
   BackendType active_backend() const { return active_backend_; }
   std::string_view backend_name() const;
+  BackendExecutorStatus executor_status() const;
 
  private:
   std::unique_ptr<RenderDeviceBackend> backend_;

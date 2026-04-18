@@ -44,6 +44,9 @@ class NativeRenderer {
   const ExecutionFramePlan& execution_plan() const { return execution_plan_; }
   ReplayExecutorFrameSummary executor_summary() const { return executor_frame_.summary; }
   const ReplayExecutorFrame& executor_frame() const { return executor_frame_; }
+  BackendExecutorStatus backend_executor_status() const {
+    return device_.executor_status();
+  }
 
  private:
   NativeRendererConfig config_{};

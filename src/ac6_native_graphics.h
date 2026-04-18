@@ -27,6 +27,7 @@ struct NativeGraphicsRuntimeStatus {
   ac6::renderer::ReplayFrameSummary replay_summary{};
   ac6::renderer::ExecutionFrameSummary execution_summary{};
   ac6::renderer::ReplayExecutorFrameSummary executor_summary{};
+  ac6::renderer::BackendExecutorStatus backend_executor_status{};
   ac6::d3d::FrameCaptureSummary capture_summary{};
   ac6::renderer::NativeFramePlan frame_plan{};
 };

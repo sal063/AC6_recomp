@@ -10,9 +10,12 @@ class MetalBackend final : public RenderDeviceBackend {
   std::string_view GetName() const override { return "metal"; }
   bool IsSupported() const override;
   bool Initialize(const NativeRendererConfig& config) override;
+  bool SubmitExecutorFrame(const ReplayExecutorFrame& frame) override;
+  BackendExecutorStatus GetExecutorStatus() const override { return executor_status_; }
   void Shutdown() override;
 
  private:
+  BackendExecutorStatus executor_status_{};
   bool initialized_ = false;
 };
 

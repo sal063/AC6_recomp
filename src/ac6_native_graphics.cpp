@@ -94,6 +94,8 @@ void UpdateStatusFromRendererUnlocked() {
   g_runtime_status.replay_summary = g_native_renderer.replay_summary();
   g_runtime_status.execution_summary = g_native_renderer.execution_summary();
   g_runtime_status.executor_summary = g_native_renderer.executor_summary();
+  g_runtime_status.backend_executor_status =
+      g_native_renderer.backend_executor_status();
   g_runtime_status.frame_plan = g_native_renderer.frame_plan();
 }
 

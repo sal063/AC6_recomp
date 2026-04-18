@@ -29,29 +29,33 @@ Work Completed
 - Added a new replay-executor layer in `replay_executor.h` and `replay_executor.cpp`.
 - Introduced `SubmissionQueueType`, `ReplayExecutorCommandPacket`, `ReplayExecutorPassPacket`, `ReplayExecutorFrameSummary`, and `ReplayExecutorFrame`.
 - Added `ReplayExecutorPlanBuilder` so the renderer can derive submission-oriented pass packets from `ExecutionFramePlan`.
-- Updated `NativeRenderer` to build replay IR first, then execution plan, then replay-executor packets, then derive the current `RenderGraph` from executor passes.
+- Added a backend executor-consumption contract in `render_device.h` and `render_device.cpp`.
+- Introduced `BackendExecutorStatus` plus backend-facing `SubmitExecutorFrame()` reporting for active backends.
+- Updated `NativeRenderer` to build replay IR first, then execution plan, then replay-executor packets, submit them to the active backend scaffold, then derive the current `RenderGraph` from executor passes.
 - Exposed replay summary data through `ac6_native_graphics.h` and `ac6_native_graphics.cpp`.
 - Exposed execution-plan summary data through `ac6_native_graphics.h` and `ac6_native_graphics.cpp`.
 - Exposed replay-executor summary data through `ac6_native_graphics.h` and `ac6_native_graphics.cpp`.
-- Surfaced replay, execution, and executor pass/command counts plus output-present state in `ac6_native_graphics_overlay.cpp`.
+- Exposed backend executor status through `ac6_native_graphics.h` and `ac6_native_graphics.cpp`.
+- Surfaced replay, execution, executor, and backend-consumption pass/command state in `ac6_native_graphics_overlay.cpp`.
 - Updated `CMakeLists.txt` to compile `replay_ir.cpp`, `execution_plan.cpp`, and `replay_executor.cpp`.
 
 Why This Matters
 
 - The renderer no longer stops at pass heuristics alone; it now carries replay IR, execution-plan, and executor artifacts forward.
 - This creates the bridge between capture analysis and future backend execution without forcing full D3D12 command-list submission too early.
-- The execution plan tracks stable per-pass resource requirements and command categories, while the replay executor now shapes queue-ready submission packets.
-- The overlay now shows whether frontend analysis, replay IR, execution planning, and executor shaping stay aligned frame to frame.
+- The execution plan tracks stable per-pass resource requirements and command categories, while the replay executor shapes queue-ready submission packets and the backend scaffold now consumes them directly.
+- The D3D12 path now records submission-oriented frame, pass, resource, pipeline, and descriptor counts even before real command-list recording exists.
+- The overlay now shows whether frontend analysis, replay IR, execution planning, executor shaping, and backend consumption stay aligned frame to frame.
 
 Verification
 
 - VS Code diagnostics are clean for the edited files.
 - Full preset build verification is still blocked by an existing Ninja build-tree issue: `Re-checking globbed directories... ninja: fatal: GetOverlappedResult: The operation completed successfully.`
 - A fresh scratch configure also cannot complete in the current terminal environment because no C++ compiler is available in `PATH`.
-- I did not see source-level diagnostics from the replay-executor changes themselves.
+- I did not see source-level diagnostics from the backend-consumption scaffold changes themselves.
 
 Next Step
 
-- Start consuming `ReplayExecutorFrame` in a real D3D12 submission path instead of only translating it back into `RenderGraph`.
+- Replace the D3D12 scaffold `SubmitExecutorFrame()` path with real device, queue, allocator, fence, and command-list recording.
 - Add guest-to-host resource translation for executor packets: render targets, depth, textures, vertex/index buffers, and fetch constants.
-- Add D3D12-side placeholders for PSO binding, descriptor setup, and barrier/state transitions while the executor contract stabilizes.
+- Upgrade the current submission counters into actual PSO binding, descriptor setup, and barrier/state transitions for the selected passes.

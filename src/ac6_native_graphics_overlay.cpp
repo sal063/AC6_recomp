@@ -37,6 +37,8 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
               static_cast<unsigned long long>(status.renderer_stats.frame_count));
   ImGui::Text("render passes built: %llu",
               static_cast<unsigned long long>(status.renderer_stats.built_pass_count));
+  ImGui::Text("backend submits: %llu",
+              static_cast<unsigned long long>(status.renderer_stats.backend_submit_count));
   ImGui::Text("frontend passes/commands: %u / %u", status.frontend_summary.pass_count,
               status.frontend_summary.total_command_count);
   ImGui::Text("replay passes/commands: %u / %u", status.replay_summary.pass_count,
@@ -85,6 +87,14 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
               status.executor_summary.graphics_pass_count,
               status.executor_summary.present_pass_count,
               status.executor_summary.resource_translation_pass_count);
+  ImGui::Text("backend consumed frame/passes/cmds: %s / %u / %u",
+              status.backend_executor_status.frame_valid ? "yes" : "no",
+              status.backend_executor_status.submitted_pass_count,
+              status.backend_executor_status.submitted_command_count);
+  ImGui::Text("backend resource/pso/descriptors: %u / %u / %u",
+              status.backend_executor_status.resource_translation_pass_count,
+              status.backend_executor_status.pipeline_state_pass_count,
+              status.backend_executor_status.descriptor_setup_pass_count);
   ImGui::Text("stages scene/post/ui: %s / %s / %s",
               status.frame_plan.has_scene_stage ? "yes" : "no",
               status.frame_plan.has_post_process_stage ? "yes" : "no",

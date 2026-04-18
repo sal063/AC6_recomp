@@ -54,8 +54,19 @@ void RenderDevice::Shutdown() {
   active_backend_ = BackendType::kUnknown;
 }
 
+bool RenderDevice::SubmitExecutorFrame(const ReplayExecutorFrame& frame) {
+  if (!backend_ || !initialized_) {
+    return false;
+  }
+  return backend_->SubmitExecutorFrame(frame);
+}
+
 std::string_view RenderDevice::backend_name() const {
   return backend_ ? backend_->GetName() : ToString(BackendType::kUnknown);
+}
+
+BackendExecutorStatus RenderDevice::executor_status() const {
+  return backend_ ? backend_->GetExecutorStatus() : BackendExecutorStatus{};
 }
 
 }  // namespace ac6::renderer

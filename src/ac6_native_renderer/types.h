@@ -32,7 +32,23 @@ struct NativeRendererStats {
   BackendType active_backend = BackendType::kUnknown;
   uint64_t frame_count = 0;
   uint64_t built_pass_count = 0;
+  uint64_t backend_submit_count = 0;
   uint64_t transient_allocation_count = 0;
+};
+
+struct BackendExecutorStatus {
+  bool initialized = false;
+  bool frame_valid = false;
+  uint64_t frame_index = 0;
+  uint32_t submitted_pass_count = 0;
+  uint32_t submitted_command_count = 0;
+  uint32_t graphics_pass_count = 0;
+  uint32_t async_compute_pass_count = 0;
+  uint32_t copy_pass_count = 0;
+  uint32_t present_pass_count = 0;
+  uint32_t resource_translation_pass_count = 0;
+  uint32_t pipeline_state_pass_count = 0;
+  uint32_t descriptor_setup_pass_count = 0;
 };
 
 constexpr std::string_view ToString(BackendType backend) {

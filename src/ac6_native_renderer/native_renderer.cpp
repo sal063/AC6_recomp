@@ -62,6 +62,7 @@ bool NativeRenderer::Initialize(const NativeRendererConfig& config) {
   stats_.active_backend = device_.active_backend();
   stats_.frame_count = 0;
   stats_.built_pass_count = 0;
+  stats_.backend_submit_count = 0;
   stats_.transient_allocation_count = 0;
   return true;
 }
@@ -95,6 +96,9 @@ void NativeRenderer::BuildBootstrapFrame() {
   replay_frame_ = replay_builder_.BuildBootstrapFrame(scheduler_.frame_index());
   execution_plan_ = execution_builder_.BuildBootstrapPlan(scheduler_.frame_index());
   executor_frame_ = executor_builder_.BuildBootstrapFrame(scheduler_.frame_index());
+  if (device_.SubmitExecutorFrame(executor_frame_)) {
+    ++stats_.backend_submit_count;
+  }
 
   // Phase-1: do not present. Build a minimal graph to prove deterministic
   // ownership without touching Rexglue emulation paths.
@@ -123,6 +127,9 @@ void NativeRenderer::BuildCapturedFrame(
   replay_frame_ = replay_builder_.Build(summary, frontend_.passes(), frame_plan_);
   execution_plan_ = execution_builder_.Build(replay_frame_, frame_plan_);
   executor_frame_ = executor_builder_.Build(execution_plan_);
+  if (device_.SubmitExecutorFrame(executor_frame_)) {
+    ++stats_.backend_submit_count;
+  }
 
   for (const ReplayExecutorPassPacket& pass : executor_frame_.passes) {
     graph_.AddPass(BuildRenderPassDesc(pass));
@@ -130,11 +137,12 @@ void NativeRenderer::BuildCapturedFrame(
 
   stats_.built_pass_count += graph_.pass_count();
   REXLOG_TRACE(
-      "AC6 native renderer observed frame={} frontend_passes={} replay_passes={} replay_commands={} execution_passes={} execution_commands={} executor_passes={} executor_commands={} selected={} draws={} clears={} resolves={} plan_valid={} out={}x{}",
+      "AC6 native renderer observed frame={} frontend_passes={} replay_passes={} replay_commands={} execution_passes={} execution_commands={} executor_passes={} executor_commands={} backend_submits={} selected={} draws={} clears={} resolves={} plan_valid={} out={}x{}",
       summary.frame_index, summary.pass_count, replay_frame_.summary.pass_count,
       replay_frame_.summary.command_count, execution_plan_.summary.pass_count,
       execution_plan_.summary.command_count, executor_frame_.summary.pass_count,
-      executor_frame_.summary.command_count, summary.selected_pass_index,
+      executor_frame_.summary.command_count, stats_.backend_submit_count,
+      summary.selected_pass_index,
       summary.total_draw_count, summary.total_clear_count,
       summary.total_resolve_count, frame_plan_.valid, frame_plan_.output_width,
       frame_plan_.output_height);

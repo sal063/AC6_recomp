@@ -184,9 +184,9 @@ X_STATUS GraphicsSystem::Setup(runtime::FunctionDispatcher* function_dispatcher,
                                         ? vsync_interval_ticks
                                         : (REXCVAR_GET(vsync) ? vsync_interval_ticks
                                                               : no_vsync_interval_ticks);
-          if (current_time - last_frame_time >= interval_ticks) {
+          while (current_time - last_frame_time >= interval_ticks) {
             MarkVblank();
-            last_frame_time = current_time;
+            last_frame_time += interval_ticks;
           }
           rex::thread::Sleep(std::chrono::milliseconds(1));
         }

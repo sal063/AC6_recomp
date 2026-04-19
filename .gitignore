@@ -35,6 +35,7 @@ rexglue_sdk_new/
 autoresearch/
 *.bak
 *.tmp
+*.md
 tmp_*.py
 build_*.txt
 *.log

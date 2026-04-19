@@ -4,6 +4,8 @@
 
 #include <rex/logging.h>
 
+#include "backends/d3d12_backend.h"
+
 namespace ac6::renderer {
 
 RenderDevice::RenderDevice() = default;
@@ -12,7 +14,24 @@ RenderDevice::~RenderDevice() {
   Shutdown();
 }
 
-bool RenderDevice::Initialize(const NativeRendererConfig& config) {
+bool RenderDevice::InitializeShared(const NativeRendererConfig& config, rex::memory::Memory* memory, ID3D12Device* device, ID3D12CommandQueue* queue) {
+  Shutdown();
+
+  active_backend_ = BackendType::kD3D12;
+  backend_ = CreateBackend(active_backend_);
+  if (!backend_) return false;
+
+  auto* d3d_backend = static_cast<D3D12Backend*>(backend_.get());
+  if (!d3d_backend->InitializeShared(config, memory, device, queue)) {
+    backend_.reset();
+    return false;
+  }
+
+  initialized_ = true;
+  return true;
+}
+
+bool RenderDevice::Initialize(const NativeRendererConfig& config, rex::memory::Memory* memory) {
   Shutdown();
 
   active_backend_ = ResolveBackend(config.preferred_backend);
@@ -30,7 +49,7 @@ bool RenderDevice::Initialize(const NativeRendererConfig& config) {
     active_backend_ = BackendType::kUnknown;
     return false;
   }
-  if (!backend_->Initialize(config)) {
+  if (!backend_->Initialize(config, memory)) {
     REXLOG_ERROR("AC6 native renderer backend {} failed initialization",
                  backend_->GetName());
     backend_.reset();

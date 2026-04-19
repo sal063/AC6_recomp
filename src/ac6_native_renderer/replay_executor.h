@@ -25,6 +25,18 @@ struct ReplayExecutorCommandPacket {
   bool requires_descriptor_setup = false;
   bool touches_render_target = false;
   bool touches_depth_stencil = false;
+  // Draw call dispatch fields (forwarded from ExecutionCommandPacket)
+  ac6::d3d::DrawCallKind draw_kind = ac6::d3d::DrawCallKind::kIndexed;
+  uint32_t primitive_type = 0;
+  uint32_t start = 0;
+  uint32_t count = 0;
+  uint32_t flags = 0;
+  uint32_t rect_count = 0;
+  uint32_t captured_rect_count = 0;
+  uint32_t color = 0;
+  uint32_t stencil = 0;
+  float depth = 1.0f;
+  ac6::d3d::ShadowState shadow_state{};
 };
 
 struct ReplayExecutorPassPacket {

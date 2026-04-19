@@ -12,8 +12,9 @@ bool VulkanBackend::IsSupported() const {
 #endif
 }
 
-bool VulkanBackend::Initialize(const NativeRendererConfig& config) {
+bool VulkanBackend::Initialize(const NativeRendererConfig& config, rex::memory::Memory* memory) {
   (void)config;
+  (void)memory;
   if (initialized_) {
     return true;
   }

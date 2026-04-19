@@ -35,10 +35,10 @@ std::vector<ac6::d3d::DrawCallRecord> g_live_draws;
 std::vector<ac6::d3d::ClearRecord> g_live_clears;
 std::vector<ac6::d3d::ResolveRecord> g_live_resolves;
 
-template <typename T, size_t N>
-uint32_t CountNonZero(const std::array<T, N>& values) {
+template <typename Container>
+uint32_t CountNonZero(const Container& values) {
     uint32_t count = 0;
-    for (const T& value : values) {
+    for (const auto& value : values) {
         if (value) {
             ++count;
         }
@@ -72,6 +72,54 @@ void HashU32(uint64_t& hash, uint32_t value) {
     constexpr uint64_t kFnvPrime = 1099511628211ull;
     hash ^= value;
     hash *= kFnvPrime;
+}
+
+void HashU64(uint64_t& hash, uint64_t value) {
+    HashU32(hash, static_cast<uint32_t>(value & 0xFFFFFFFFull));
+    HashU32(hash, static_cast<uint32_t>(value >> 32));
+}
+
+uint64_t ComputeVertexFetchLayoutSignature(const ac6::d3d::ShadowState& shadow) {
+    constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ull;
+    uint64_t hash = kFnvOffsetBasis;
+    HashU32(hash, shadow.vertex_declaration);
+    for (const auto& stream : shadow.streams) {
+        HashU32(hash, stream.buffer);
+        HashU32(hash, stream.offset);
+        HashU32(hash, stream.stride);
+    }
+    return hash;
+}
+
+uint64_t ComputeTextureFetchLayoutSignature(const ac6::d3d::ShadowState& shadow) {
+    constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ull;
+    uint64_t hash = kFnvOffsetBasis;
+    for (uint32_t texture : shadow.texture_fetch_ptrs) {
+        HashU32(hash, texture);
+    }
+    return hash;
+}
+
+uint64_t ComputeResourceBindingSignature(const ac6::d3d::ShadowState& shadow) {
+    constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ull;
+    uint64_t hash = kFnvOffsetBasis;
+    for (uint32_t target : shadow.render_targets) {
+        HashU32(hash, target);
+    }
+    HashU32(hash, shadow.depth_stencil);
+    for (uint32_t texture : shadow.textures) {
+        HashU32(hash, texture);
+    }
+    for (const auto& sampler : shadow.samplers) {
+        HashU32(hash, sampler.mag_filter);
+        HashU32(hash, sampler.min_filter);
+        HashU32(hash, sampler.mip_filter);
+        HashU32(hash, sampler.mip_level);
+        HashU32(hash, sampler.border_color);
+    }
+    HashU64(hash, shadow.vertex_fetch_layout_signature);
+    HashU64(hash, shadow.texture_fetch_layout_signature);
+    return hash;
 }
 
 void HashDrawRecord(uint64_t& hash, const ac6::d3d::DrawCallRecord& draw) {
@@ -189,6 +237,9 @@ ac6::d3d::ShadowState SnapshotShadowState(uint32_t device) {
     if (device != 0) {
         shadow.device = device;
     }
+    shadow.vertex_fetch_layout_signature = ComputeVertexFetchLayoutSignature(shadow);
+    shadow.texture_fetch_layout_signature = ComputeTextureFetchLayoutSignature(shadow);
+    shadow.resource_binding_signature = ComputeResourceBindingSignature(shadow);
     return shadow;
 }
 
@@ -726,6 +777,7 @@ PPC_FUNC_IMPL(rex_sub_821E10C8) {
 namespace ac6::d3d {
 
 void OnFrameBoundary() {
+    REXLOG_INFO("d3d::OnFrameBoundary: frame_index={}", g_capture_live_frame_index);
     ac6::d3d::DrawStatsSnapshot draw_stats = SnapshotDrawStats();
 
     std::unique_lock<std::shared_mutex> lock(g_snapshot_mutex);

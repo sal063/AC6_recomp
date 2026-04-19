@@ -49,6 +49,26 @@ struct BackendExecutorStatus {
   uint32_t resource_translation_pass_count = 0;
   uint32_t pipeline_state_pass_count = 0;
   uint32_t descriptor_setup_pass_count = 0;
+  uint32_t draw_attempt_count = 0;
+  uint32_t draw_success_count = 0;
+  uint32_t draw_prepare_failure_count = 0;
+  uint32_t draw_pso_failure_count = 0;
+  uint32_t indexed_draw_count = 0;
+  uint32_t non_indexed_draw_count = 0;
+  uint32_t clear_command_count = 0;
+  uint32_t resolve_command_count = 0;
+  uint32_t invalid_stream_binding_count = 0;
+  uint32_t invalid_index_buffer_count = 0;
+  uint32_t index_count_overflow_count = 0;
+  uint32_t index_data_unavailable_count = 0;
+  uint32_t index_buffer_create_failure_count = 0;
+  uint32_t index_upload_failure_count = 0;
+  uint32_t zero_vertex_count = 0;
+  uint32_t invalid_vertex_range_count = 0;
+  uint32_t vertex_buffer_size_invalid_count = 0;
+  uint32_t vertex_buffer_create_failure_count = 0;
+  uint32_t vertex_data_unavailable_count = 0;
+  uint32_t vertex_upload_failure_count = 0;
 };
 
 constexpr std::string_view ToString(BackendType backend) {

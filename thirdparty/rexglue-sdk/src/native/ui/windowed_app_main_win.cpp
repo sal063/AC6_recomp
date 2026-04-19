@@ -60,6 +60,11 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
   auto remaining = rex::cvar::Init(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
   rex::cvar::ApplyEnvironment();
 
+  // Force logging to a file immediately
+  auto log_config = rex::BuildLogConfig("ac6_boot.log", "info", {});
+  rex::InitLogging(log_config);
+  REXLOG_INFO("wWinMain started");
+
   // Allocate a console for debugging if enabled
   if (REXCVAR_GET(enable_console)) {
     AllocConsole();
@@ -73,14 +78,19 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
   int result;
 
   {
+    REXLOG_INFO("wWinMain: Creating Win32WindowedAppContext...");
     rex::ui::Win32WindowedAppContext app_context(hinstance, show_cmd);
     // TODO(Triang3l): Initialize creates a window. Set DPI awareness via the
     // manifest.
+    REXLOG_INFO("wWinMain: Initializing app context...");
     if (!app_context.Initialize()) {
+      REXLOG_ERROR("wWinMain: app_context.Initialize failed");
       return EXIT_FAILURE;
     }
 
+    REXLOG_INFO("wWinMain: Getting app creator...");
     std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
+    REXLOG_INFO("wWinMain: App instance created");
 
     // Match remaining positional args to app's expected options
     const auto& option_names = app->GetPositionalOptions();
@@ -93,14 +103,24 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
 
     // Initialize COM on the UI thread with the apartment-threaded concurrency
     // model, so dialogs can be used.
+    REXLOG_INFO("wWinMain: Initializing COM...");
     if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
+      REXLOG_ERROR("wWinMain: CoInitializeEx failed");
       return EXIT_FAILURE;
     }
 
     // TODO: Port InitializeWin32App from Xenia
     // rex::InitializeWin32App(app->GetName());
 
-    result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
+    REXLOG_INFO("wWinMain: Calling app->OnInitialize()...");
+    if (!app->OnInitialize()) {
+      REXLOG_ERROR("wWinMain: app->OnInitialize failed");
+      return EXIT_FAILURE;
+    }
+
+    REXLOG_INFO("wWinMain: Entering main message loop...");
+    result = app_context.RunMainMessageLoop();
+    REXLOG_INFO("wWinMain: Main message loop exited with result {}", result);
 
     app->InvokeOnDestroy();
   }

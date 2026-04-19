@@ -32,6 +32,18 @@ ReplayExecutorCommandPacket BuildExecutorCommandPacket(
            command.fetch_constant_count != 0),
       .touches_render_target = command.render_target_0 != 0,
       .touches_depth_stencil = command.depth_stencil != 0,
+      // Forwarded dispatch fields
+      .draw_kind = command.draw_kind,
+      .primitive_type = command.primitive_type,
+      .start = command.start,
+      .count = command.count,
+      .flags = command.flags,
+      .rect_count = command.rect_count,
+      .captured_rect_count = command.captured_rect_count,
+      .color = command.color,
+      .stencil = command.stencil,
+      .depth = command.depth,
+      .shadow_state = command.shadow_state,
   };
 }
 

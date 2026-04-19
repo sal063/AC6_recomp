@@ -9,7 +9,8 @@ class MetalBackend final : public RenderDeviceBackend {
   BackendType GetType() const override { return BackendType::kMetal; }
   std::string_view GetName() const override { return "metal"; }
   bool IsSupported() const override;
-  bool Initialize(const NativeRendererConfig& config) override;
+  bool Initialize(const NativeRendererConfig& config, rex::memory::Memory* memory) override;
+  bool InitializeShared(const NativeRendererConfig& config, rex::memory::Memory* memory, ID3D12Device* device, ID3D12CommandQueue* queue) override { return false; }
   bool SubmitExecutorFrame(const ReplayExecutorFrame& frame) override;
   BackendExecutorStatus GetExecutorStatus() const override { return executor_status_; }
   void Shutdown() override;

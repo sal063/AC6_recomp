@@ -48,6 +48,7 @@ ExecutionCommandPacket BuildExecutionCommandPacket(const ReplayCommandDesc& comm
       .viewport_y = command.viewport_y,
       .viewport_width = command.viewport_width,
       .viewport_height = command.viewport_height,
+      .shadow_state = command.shadow_state,
   };
 }
 

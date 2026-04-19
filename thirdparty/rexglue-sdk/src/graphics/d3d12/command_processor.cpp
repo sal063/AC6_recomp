@@ -31,6 +31,9 @@
 #include <rex/ui/d3d12/d3d12_presenter.h>
 #include <rex/ui/d3d12/d3d12_util.h>
 
+#include "../../../../../src/ac6_backend_fixes/ac6_backend_hooks.h"
+#include "../../../../../src/ac6_native_graphics.h"
+
 REXCVAR_DEFINE_BOOL(d3d12_bindless, true, "GPU/D3D12", "Use bindless resources where available")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
@@ -1989,39 +1992,62 @@ bool D3D12CommandProcessor::IssueSwapInternal(uint32_t frontbuffer_ptr,
     return false;
   }
 
+  // Let AC6 consume the frame-boundary callback on the GPU thread before
+  // choosing the swap source. This is analysis-first by default; the legacy
+  // replay path only overrides presentation if explicitly enabled.
+  {
+    system::GraphicsSwapSubmission frame_boundary_submission = {};
+    frame_boundary_submission.frontbuffer_virtual_address = frontbuffer_ptr;
+    frame_boundary_submission.frontbuffer_width = frontbuffer_width;
+    frame_boundary_submission.frontbuffer_height = frontbuffer_height;
+    graphics_system_->HandleVideoSwap(frame_boundary_submission);
+  }
+
   // Obtain the actual swap source texture size (resolution-scaled if it's a
   // resolve destination, or not otherwise).
   D3D12_SHADER_RESOURCE_VIEW_DESC swap_texture_srv_desc = {};
   xenos::TextureFormat frontbuffer_format;
   uint32_t frontbuffer_width_unscaled = 0, frontbuffer_height_unscaled = 0;
-  
-  REXGPU_ERROR("IssueSwap: Calling RequestSwapTexture for fb={:08X}", frontbuffer_ptr);
-  ID3D12Resource* swap_texture_resource =
-      texture_cache_->RequestSwapTexture(swap_texture_srv_desc, frontbuffer_format,
-                                         &frontbuffer_width_unscaled, &frontbuffer_height_unscaled);
-  if (!swap_texture_resource) {
-    REXGPU_ERROR("IssueSwap: RequestSwapTexture returned null, trying UpdateDirectDisplayTexture");
-    swap_texture_resource = UpdateDirectDisplayTexture(
-        frontbuffer_ptr, frontbuffer_width, frontbuffer_height,
+  bool using_native_swap_texture = false;
+  bool used_direct_display_fallback = false;
+
+  ID3D12Resource* swap_texture_resource = ac6::graphics::GetNativeOutputTexture();
+  if (swap_texture_resource) {
+    D3D12_RESOURCE_DESC native_desc = swap_texture_resource->GetDesc();
+    swap_texture_srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    swap_texture_srv_desc.Format = native_desc.Format;
+    swap_texture_srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    swap_texture_srv_desc.Texture2D.MostDetailedMip = 0;
+    swap_texture_srv_desc.Texture2D.MipLevels = 1;
+    swap_texture_srv_desc.Texture2D.PlaneSlice = 0;
+    swap_texture_srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+    frontbuffer_format = xenos::TextureFormat::k_8_8_8_8;
+    frontbuffer_width_unscaled = uint32_t(native_desc.Width);
+    frontbuffer_height_unscaled = native_desc.Height;
+    frontbuffer_width = frontbuffer_width_unscaled;
+    frontbuffer_height = frontbuffer_height_unscaled;
+    using_native_swap_texture = true;
+  } else {
+    swap_texture_resource = texture_cache_->RequestSwapTexture(
         swap_texture_srv_desc, frontbuffer_format,
         &frontbuffer_width_unscaled, &frontbuffer_height_unscaled);
-
     if (!swap_texture_resource) {
-      // Dump texture fetch constant 0 for debugging
-      const auto& regs = *register_file_;
-      auto fetch = regs.GetTextureFetch(0);
-      REXGPU_ERROR(
-          "IssueSwap: RequestSwapTexture failed - fetch0: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
-          fetch.dword_0, fetch.dword_1, fetch.dword_2, fetch.dword_3, fetch.dword_4, fetch.dword_5);
-      EndSubmission(true);
-      return false;
-    }
-  } else {
-    REXGPU_ERROR("IssueSwap: RequestSwapTexture SUCCESS {:016X}", (uint64_t)swap_texture_resource);
-    static bool logged_non_black = false;
-    if (!logged_non_black) {
-      REXGPU_ERROR("Non-black frame detected");
-      logged_non_black = true;
+      swap_texture_resource = UpdateDirectDisplayTexture(
+          frontbuffer_ptr, frontbuffer_width, frontbuffer_height,
+          swap_texture_srv_desc, frontbuffer_format,
+          &frontbuffer_width_unscaled, &frontbuffer_height_unscaled);
+      used_direct_display_fallback = swap_texture_resource != nullptr;
+
+      if (!swap_texture_resource) {
+        // Dump texture fetch constant 0 for debugging
+        const auto& regs = *register_file_;
+        auto fetch = regs.GetTextureFetch(0);
+        REXGPU_ERROR(
+            "IssueSwap: RequestSwapTexture failed - fetch0: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+            fetch.dword_0, fetch.dword_1, fetch.dword_2, fetch.dword_3, fetch.dword_4, fetch.dword_5);
+        EndSubmission(true);
+        return false;
+      }
     }
   }
   D3D12_RESOURCE_DESC swap_texture_desc = swap_texture_resource->GetDesc();
@@ -2076,6 +2102,36 @@ bool D3D12CommandProcessor::IssueSwapInternal(uint32_t frontbuffer_ptr,
     }
   }
 
+  system::GraphicsSwapSubmission ac6_submission = {};
+  uint64_t ac6_submission_sequence = 0;
+  graphics_system_->GetLastSwapSubmission(&ac6_submission, &ac6_submission_sequence);
+  if (!ac6_submission_sequence) {
+    ac6_submission.frontbuffer_virtual_address = frontbuffer_ptr;
+    ac6_submission.frontbuffer_width = frontbuffer_width;
+    ac6_submission.frontbuffer_height = frontbuffer_height;
+  }
+
+  auto* ac6_vertex_shader = static_cast<D3D12Shader*>(active_vertex_shader());
+  auto* ac6_pixel_shader = static_cast<D3D12Shader*>(active_pixel_shader());
+  uint64_t ac6_vertex_shader_hash =
+      ac6_vertex_shader ? ac6_vertex_shader->ucode_data_hash() : 0;
+  uint64_t ac6_pixel_shader_hash =
+      ac6_pixel_shader ? ac6_pixel_shader->ucode_data_hash() : 0;
+
+  ac6::backend::SwapSourceType ac6_swap_source =
+      ac6::backend::SwapSourceType::kGuestSwapTexture;
+  if (using_native_swap_texture) {
+    ac6_swap_source = ac6::backend::SwapSourceType::kExperimentalReplayOverride;
+  } else if (used_direct_display_fallback) {
+    ac6_swap_source = ac6::backend::SwapSourceType::kDirectDisplayFallback;
+  }
+
+  ac6::backend::ReportSwapDecision(
+      ac6_submission, ac6_submission_sequence, ac6_swap_source,
+      swap_source_scaled, guest_output_width, guest_output_height,
+      source_width_scaled, source_height_scaled, ac6_vertex_shader_hash,
+      ac6_pixel_shader_hash);
+
   system::X_VIDEO_MODE video_mode;
   kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
@@ -2083,9 +2139,9 @@ bool D3D12CommandProcessor::IssueSwapInternal(uint32_t frontbuffer_ptr,
 
   bool refreshed = presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
-      [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource, guest_output_width,
+      [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource,
+       using_native_swap_texture, guest_output_width,
        guest_output_height](ui::Presenter::GuestOutputRefreshContext& context) -> bool {
-        REXGPU_ERROR("Inside RefreshGuestOutput lambda for fb!");
         const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
         ID3D12Device* device = provider.GetDevice();
 
@@ -2258,6 +2314,11 @@ bool D3D12CommandProcessor::IssueSwapInternal(uint32_t frontbuffer_ptr,
                                          apply_gamma_descriptors[1].first);
 
         REXGPU_ERROR("RefreshGuestOutput: checkpoint 3.3 - PushTransitionBarrier");
+        if (using_native_swap_texture) {
+          PushTransitionBarrier(swap_texture_resource,
+                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
         PushTransitionBarrier(gamma_ramp_buffer_.Get(), gamma_ramp_buffer_state_,
                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         gamma_ramp_buffer_state_ = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -2389,6 +2450,11 @@ bool D3D12CommandProcessor::IssueSwapInternal(uint32_t frontbuffer_ptr,
         // Need to submit all the commands before giving the image back to the
         // presenter so it can submit its own commands for displaying it to the
         // queue.
+        if (using_native_swap_texture) {
+          PushTransitionBarrier(swap_texture_resource,
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         REXGPU_ERROR("RefreshGuestOutput: checkpoint 6 (SubmitBarriers pre-EndSubmission)");
         SubmitBarriers();
         REXGPU_ERROR("RefreshGuestOutput: checkpoint 7 (EndSubmission)");
@@ -5205,7 +5271,10 @@ ID3D12Resource* rex::graphics::d3d12::D3D12CommandProcessor::UpdateDirectDisplay
   uint32_t height = frontbuffer_height ? frontbuffer_height : 720;
   uint32_t bpp = 4;
 
-  REXGPU_ERROR("UpdateDirectDisplayTexture: processing fb_ptr={:08X} w={} h={}", frontbuffer_ptr, width, height);
+  if (REXCVAR_GET(ac6_backend_debug_swap)) {
+    REXGPU_INFO("UpdateDirectDisplayTexture: fb_ptr={:08X} w={} h={}", frontbuffer_ptr,
+                width, height);
+  }
 
   bool is_direct_fb = false;
   uint32_t fb_addr = 0;
@@ -5260,7 +5329,9 @@ ID3D12Resource* rex::graphics::d3d12::D3D12CommandProcessor::UpdateDirectDisplay
   ID3D12Device* device = GetD3D12Provider().GetDevice();
 
   if (!direct_display_texture_) {
-    REXGPU_ERROR("UpdateDirectDisplayTexture: creating direct_display_texture_");
+    if (REXCVAR_GET(ac6_backend_debug_swap)) {
+      REXGPU_INFO("UpdateDirectDisplayTexture: creating fallback frontbuffer texture");
+    }
     D3D12_RESOURCE_DESC desc = {};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = width;
@@ -5295,7 +5366,6 @@ ID3D12Resource* rex::graphics::d3d12::D3D12CommandProcessor::UpdateDirectDisplay
 
   uint32_t row_pitch = rex::align(width * bpp, uint32_t(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT));
 
-  bool non_black_detected = false;
   uint32_t chunk_height = 256;
   for (uint32_t y = 0; y < height; y += chunk_height) {
     uint32_t rows_to_copy = std::min(height - y, chunk_height);
@@ -5315,15 +5385,6 @@ ID3D12Resource* rex::graphics::d3d12::D3D12CommandProcessor::UpdateDirectDisplay
           std::memcpy(upload_mapping + cy * row_pitch,
                       src_ptr,
                       width * bpp);
-          if (!non_black_detected) {
-            uint32_t* p = reinterpret_cast<uint32_t*>(src_ptr);
-            for (uint32_t x = 0; x < width; ++x) {
-              if ((p[x] & 0xFFFFFF) != 0) {
-                non_black_detected = true;
-                break;
-              }
-            }
-          }
         }
       }
 
@@ -5349,19 +5410,9 @@ ID3D12Resource* rex::graphics::d3d12::D3D12CommandProcessor::UpdateDirectDisplay
     }
   }
 
-  if (non_black_detected) {
-    static bool logged_non_black = false;
-    if (!logged_non_black) {
-      REXGPU_ERROR("Non-black frame detected");
-      logged_non_black = true;
-    }
-  }
-
   PushTransitionBarrier(direct_display_texture_.Get(), direct_display_texture_state_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   direct_display_texture_state_ = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   SubmitBarriers();
-
-  REXGPU_ERROR("UpdateDirectDisplayTexture: SUCCESS for fb={:08X}", fb_addr);
 
   srv_desc_out.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
   srv_desc_out.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;

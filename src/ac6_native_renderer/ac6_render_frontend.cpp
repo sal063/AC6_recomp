@@ -5,10 +5,10 @@
 namespace ac6::renderer {
 namespace {
 
-template <typename T, size_t N>
-uint32_t CountNonZeroEntries(const std::array<T, N>& values) {
+template <typename Container>
+uint32_t CountNonZeroEntries(const Container& values) {
   uint32_t count = 0;
-  for (const T& value : values) {
+  for (const auto& value : values) {
     if (value) {
       ++count;
     }
@@ -73,6 +73,7 @@ ObservedCommandDesc MakeObservedCommand(const ac6::d3d::DrawCallRecord& draw) {
       .viewport_y = draw.shadow_state.viewport.y,
       .viewport_width = draw.shadow_state.viewport.width,
       .viewport_height = draw.shadow_state.viewport.height,
+      .shadow_state = draw.shadow_state,
   };
 }
 
@@ -96,6 +97,7 @@ ObservedCommandDesc MakeObservedCommand(const ac6::d3d::ClearRecord& clear) {
       .viewport_y = clear.shadow_state.viewport.y,
       .viewport_width = clear.shadow_state.viewport.width,
       .viewport_height = clear.shadow_state.viewport.height,
+      .shadow_state = clear.shadow_state,
   };
 }
 
@@ -113,6 +115,7 @@ ObservedCommandDesc MakeObservedCommand(const ac6::d3d::ResolveRecord& resolve) 
       .viewport_y = resolve.shadow_state.viewport.y,
       .viewport_width = resolve.shadow_state.viewport.width,
       .viewport_height = resolve.shadow_state.viewport.height,
+      .shadow_state = resolve.shadow_state,
   };
 }
 

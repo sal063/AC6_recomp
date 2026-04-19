@@ -106,6 +106,9 @@ struct ShadowState {
     std::array<SamplerBinding, kMaxSamplers> samplers{};
     std::array<uint32_t, kMaxFetchConstants> texture_fetch_ptrs{};
     uint32_t shader_gpr_alloc{0};
+    uint64_t vertex_fetch_layout_signature{0};
+    uint64_t texture_fetch_layout_signature{0};
+    uint64_t resource_binding_signature{0};
 
     struct {
         uint32_t x{0};

@@ -5,7 +5,16 @@ DEV TESTING BRANCH. THINGS WILL BREAK HERE
 > [!CAUTION]
 > This project is still work in progress. It can boot and run in-game, but bugs, crashes, and missing functionality should be expected.
 
-A native PC port of **Ace Combat 6: Fires of Liberation** (Xbox 360), built on top of the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk). The Xbox 360 PowerPC binary is statically recompiled to x86-64 so the original game logic runs natively on your host CPU, with a fully native D3D12/Vulkan renderer replacing the original Xenos GPU pipeline.
+A native PC port of **Ace Combat 6: Fires of Liberation** built on top of the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk). The Xbox 360 PowerPC game code is statically recompiled to x86-64, while visible rendering currently remains authoritative in the vendored RexGlue/Xenia graphics backend.
+
+The AC6-specific graphics layer in this repo is now focused on:
+
+- frame capture and diagnostics
+- swap-path inspection and overlay reporting
+- backend-fix routing for AC6-specific rendering issues
+- future selective override and modding hooks
+
+The legacy AC6 replay renderer is still present as experimental tooling, but it is **not** the default render path and it does **not** hijack presentation unless `ac6_graphics_mode=legacy_replay_experimental` and `ac6_experimental_replay_present=true`.
 
 ## Repository policy
 
@@ -20,148 +29,43 @@ Do **not** commit or redistribute:
 
 Users must supply their own legally obtained game files locally.
 
----
-
-## Prerequisites
-
-| Tool | Version | Notes |
-|---|---|---|
-| [CMake](https://cmake.org/) | 3.25+ | |
-| [Ninja](https://ninja-build.org/) | any recent | required generator |
-| [Clang/LLVM](https://releases.llvm.org/) | any recent | `clang` / `clang++` must be on `PATH` |
-| Windows SDK | 10.0.19041+ | D3D12 headers (Windows only) |
-
-> [!NOTE]
-> The Linux preset uses `clang-20` / `clang++-20` directly. Install the versioned binaries via your distro's package manager (`apt install clang-20`) or via the [LLVM APT repository](https://apt.llvm.org).
-
----
-
-## Acquiring the game files
-
-1. Obtain the original Xbox 360 disc image (ISO) by dumping your own disc.  
-   Guides and tools: [consolemods.org – ISO Extraction & Repacking](https://consolemods.org/wiki/Xbox:ISO_Extraction_%26_Repacking)
-2. Extract the XEX and game data from the ISO.
-3. Place the resulting files inside the `assets/` directory (created manually — it is git-ignored):
-
-```text
-assets/
-  default.xex        ← required by the codegen step
-  media/             ← game data (audio, video, maps, …)
-  …
-```
-
----
-
-## Clone
-
-```bash
-git clone https://github.com/sal063/AC6_recomp.git
-cd AC6_recomp
-```
-
-> [!NOTE]
-> The ReXGlue SDK (`thirdparty/rexglue-sdk/`) is vendored directly in the repository. No submodule init is needed.
-
----
-
 ## Build
 
-### 1 — Configure
-
 ```bash
 cmake --preset win-amd64-relwithdebinfo
-```
-
-### 2 — Generate the recompiled code (first time, and after updating `default.xex`)
-
-```bash
 cmake --build --preset win-amd64-relwithdebinfo --target ac6recomp_codegen
-```
-
-This step reads `assets/default.xex`, lifts all PowerPC instructions to C++, and writes the output to `generated/`. It can take a few minutes.
-
-### 3 — Re-run CMake configure
-
-```bash
 cmake --preset win-amd64-relwithdebinfo
-```
-
-Re-run configure after codegen so CMake picks up the generated `generated/sources.cmake` file and adds the generated `.cpp` sources to the target.
-
-### 4 — Build the runtime
-
-```bash
 cmake --build --preset win-amd64-relwithdebinfo
 ```
 
-The executable is placed at:
+The executable is placed at `out/build/win-amd64-relwithdebinfo/ac6recomp.exe`.
 
-```
-out/build/win-amd64-relwithdebinfo/ac6recomp.exe
-```
+## Runtime Defaults
 
-> [!TIP]
-> `RelWithDebInfo` is the recommended preset — it gives near-release performance with symbols intact for debugging. A full `Release` build disables assertions and can be used for distribution.
+The default AC6 graphics configuration after this pivot is:
 
-### Available presets
+- `ac6_native_graphics_enabled=true`
+- `ac6_graphics_mode=hybrid_backend_fixes`
+- `ac6_render_capture=true`
+- `ac6_experimental_replay_present=false`
 
-| Preset | Platform | Build type |
-|---|---|---|
-| `win-amd64-debug` | Windows | Debug |
-| `win-amd64-release` | Windows | Release |
-| `win-amd64-relwithdebinfo` | Windows | RelWithDebInfo ✅ recommended |
-| `linux-amd64-debug` | Linux | Debug |
-| `linux-amd64-release` | Linux | Release |
-| `linux-amd64-relwithdebinfo` | Linux | RelWithDebInfo |
-
----
-
-## Run
-
-```bash
-./out/build/win-amd64-relwithdebinfo/ac6recomp assets
-```
-
-The single argument is the path to the directory containing your game files (`assets/` by default). The runtime resolves all paths relative to it.
-
----
-
-## Linux
-
-Substitute `win-amd64-relwithdebinfo` with `linux-amd64-relwithdebinfo` in every command above.
-
-```bash
-cmake --preset linux-amd64-relwithdebinfo
-cmake --build --preset linux-amd64-relwithdebinfo --target ac6recomp_codegen
-cmake --preset linux-amd64-relwithdebinfo
-cmake --build --preset linux-amd64-relwithdebinfo
-./out/build/linux-amd64-relwithdebinfo/ac6recomp assets
-```
-
----
+That means the RexGlue/Xenia D3D12 backend remains the visible renderer by default, while AC6-specific analysis and diagnostics stay active.
 
 ## Project layout
 
-```
+```text
 AC6_recomp/
-├── src/                        Host-side runtime & renderer
-│   ├── main.cpp
-│   ├── ac6_native_graphics.*   Xenon → native GPU command translation
-│   ├── ac6_native_renderer/    Native rendering backend (D3D12 / Vulkan)
-│   │   ├── backends/           Per-API backend implementations
-│   │   ├── frame_plan.*        Frame dependency graph construction
-│   │   ├── frame_scheduler.*   CPU/GPU timeline management
-│   │   ├── native_renderer.*   Top-level renderer orchestration
-│   │   └── render_device.*     Device abstraction layer
-│   └── d3d_hooks.*             Low-level D3D intercept layer
-├── thirdparty/rexglue-sdk/     ReXGlue SDK (vendored)
-├── assets/                     ← NOT in repo; place your game files here
-├── generated/                  ← NOT in repo; output of codegen step
-├── CMakeLists.txt
-└── CMakePresets.json
+|- src/
+|  |- ac6_backend_fixes/       AC6-specific backend diagnostics and fix routing
+|  |- ac6_native_graphics.*    AC6 frame-boundary analysis and overlay status
+|  |- ac6_native_renderer/     Experimental replay renderer and research tooling
+|  |- d3d_hooks.*              Guest D3D capture and shadow-state hooks
+|  `- render_hooks.*           Timing and frame pacing hooks
+|- thirdparty/rexglue-sdk/     Vendored RexGlue SDK
+|- generated/                  Generated recomp sources
+|- assets/                     Local game files, not kept in repo
+`- docs/RENDERER_ARCHITECTURE.txt
 ```
-
----
 
 ## License
 

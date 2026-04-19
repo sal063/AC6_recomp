@@ -74,7 +74,10 @@ class GraphicsSystem : public system::IGraphicsSystem {
   virtual void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) override;
 
   virtual void SetInterruptCallback(uint32_t callback, uint32_t user_data) override;
+  virtual void SetFrameBoundaryCallback(std::function<void(rex::memory::Memory*)> callback) override;
   virtual bool HandleVideoSwap(const system::GraphicsSwapSubmission& submission) override;
+  bool GetLastSwapSubmission(system::GraphicsSwapSubmission* out_submission,
+                             uint64_t* out_sequence = nullptr) const;
   void DispatchInterruptCallback(uint32_t source, uint32_t cpu);
 
   virtual void ClearCaches();
@@ -90,6 +93,13 @@ class GraphicsSystem : public system::IGraphicsSystem {
   bool is_paused() const { return paused_; }
   void Pause();
   void Resume();
+
+  uint64_t guest_vblank_interval_ticks() const {
+    return guest_vblank_interval_ticks_.load(std::memory_order_acquire);
+  }
+  uint64_t last_vblank_interrupt_guest_tick() const {
+    return last_vblank_interrupt_guest_tick_.load(std::memory_order_acquire);
+  }
 
   bool Save(::rex::stream::ByteStream* stream);
   bool Restore(::rex::stream::ByteStream* stream);
@@ -107,12 +117,6 @@ class GraphicsSystem : public system::IGraphicsSystem {
   void WriteRegister(uint32_t addr, uint32_t value);
 
   void MarkVblank();
-  uint64_t guest_vblank_interval_ticks() const {
-    return guest_vblank_interval_ticks_.load(std::memory_order_acquire);
-  }
-  uint64_t last_vblank_interrupt_guest_tick() const {
-    return last_vblank_interrupt_guest_tick_.load(std::memory_order_acquire);
-  }
 
   memory::Memory* memory_ = nullptr;
   runtime::FunctionDispatcher* function_dispatcher_ = nullptr;
@@ -127,6 +131,11 @@ class GraphicsSystem : public system::IGraphicsSystem {
   system::object_ref<system::XHostThread> vsync_worker_thread_;
   std::atomic<uint64_t> guest_vblank_interval_ticks_{0};
   std::atomic<uint64_t> last_vblank_interrupt_guest_tick_{0};
+  mutable std::mutex last_swap_submission_mutex_;
+  system::GraphicsSwapSubmission last_swap_submission_{};
+  uint64_t last_swap_submission_sequence_ = 0;
+
+  std::function<void(rex::memory::Memory*)> frame_boundary_callback_;
 
   RegisterFile register_file_;
   std::unique_ptr<CommandProcessor> command_processor_;

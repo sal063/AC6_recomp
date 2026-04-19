@@ -17,91 +17,112 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
     return;
   }
 
-  if (!ImGui::Begin("AC6 Native Graphics##status", &visible_, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin("AC6 Graphics Diagnostics##status", &visible_,
+                    ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();
     return;
   }
 
   const NativeGraphicsRuntimeStatus status = GetRuntimeStatus();
-  ImGui::Text("enabled: %s", status.enabled ? "true" : "false");
-  ImGui::Text("initialized: %s", status.initialized ? "true" : "false");
-  ImGui::Text("init failures seen: %s", status.had_init_failure ? "true" : "false");
-  ImGui::Text("init attempts/successes: %llu / %llu",
-              static_cast<unsigned long long>(status.init_attempts),
-              static_cast<unsigned long long>(status.init_successes));
-  ImGui::Text("frames built: %llu", static_cast<unsigned long long>(status.frames_built));
-  ImGui::Separator();
-  ImGui::Text("backend: %s", ac6::renderer::ToString(status.active_backend).data());
-  ImGui::Text("feature level: %s", ac6::renderer::ToString(status.feature_level).data());
-  ImGui::Text("renderer frames: %llu",
-              static_cast<unsigned long long>(status.renderer_stats.frame_count));
-  ImGui::Text("render passes built: %llu",
-              static_cast<unsigned long long>(status.renderer_stats.built_pass_count));
-  ImGui::Text("backend submits: %llu",
-              static_cast<unsigned long long>(status.renderer_stats.backend_submit_count));
-  ImGui::Text("frontend passes/commands: %u / %u", status.frontend_summary.pass_count,
-              status.frontend_summary.total_command_count);
-  ImGui::Text("replay passes/commands: %u / %u", status.replay_summary.pass_count,
-              status.replay_summary.command_count);
-  ImGui::Text("execution passes/commands: %u / %u",
-              status.execution_summary.pass_count, status.execution_summary.command_count);
-  ImGui::Text("executor passes/commands: %u / %u",
-              status.executor_summary.pass_count, status.executor_summary.command_count);
+  const auto& diagnostics = status.backend_diagnostics;
+
+  ImGui::Text("module: %s", status.enabled ? "enabled" : "disabled");
+  ImGui::Text("mode: %.*s", static_cast<int>(ToString(status.mode).size()),
+              ToString(status.mode).data());
+  ImGui::Text("authoritative renderer: %s",
+              status.authoritative_renderer_active ? "RexGlue/Xenia D3D12 backend"
+                                                   : "disabled");
+  ImGui::Text("capture active: %s", status.capture_enabled ? "yes" : "no");
+  ImGui::Text("experimental replay present override: %s",
+              status.experimental_replay_present ? "enabled" : "disabled");
+  ImGui::Text("analysis frames / replay frames: %llu / %llu",
+              static_cast<unsigned long long>(status.analysis_frames_observed),
+              static_cast<unsigned long long>(status.replay_frames_built));
+
   ImGui::Separator();
   ImGui::Text("capture frame: %llu",
               static_cast<unsigned long long>(status.capture_summary.frame_index));
-  ImGui::Text("capture draws/clears/resolves: %u / %u / %u",
+  ImGui::Text("capture draws / clears / resolves: %u / %u / %u",
               status.capture_summary.draw_count, status.capture_summary.clear_count,
               status.capture_summary.resolve_count);
+  ImGui::Text("capture indexed / shared / primitive: %u / %u / %u",
+              status.capture_summary.indexed_draw_count,
+              status.capture_summary.indexed_shared_draw_count,
+              status.capture_summary.primitive_draw_count);
+  ImGui::Text("capture rt0 switches / unique rt0: %u / %u",
+              status.capture_summary.rt0_switch_count,
+              status.capture_summary.unique_rt0_count);
+  ImGui::Text("frame-end viewport: %ux%u",
+              status.capture_summary.frame_end_viewport_width,
+              status.capture_summary.frame_end_viewport_height);
+
   ImGui::Separator();
-  ImGui::TextUnformatted("guest draw counts (this frame, pre-reset):");
-  ImGui::Text("  indexed / shared / primitive: %u / %u / %u",
-              status.capture_summary.frame_stats.draw_calls_indexed,
-              status.capture_summary.frame_stats.draw_calls_indexed_shared,
-              status.capture_summary.frame_stats.draw_calls_primitive);
-  ImGui::Text("  set_sampler / set_texture_fetch: %u / %u",
-              status.capture_summary.frame_stats.set_sampler_state_calls,
-              status.capture_summary.frame_stats.set_texture_fetch_calls);
-  ImGui::TextUnformatted("primitive topology (D3D9 type, all draws):");
-  ImGui::Text("  point %u  line %u  strip %u  tri %u  triStrip %u  fan %u  other %u",
-              status.capture_summary.topology_pointlist, status.capture_summary.topology_linelist,
-              status.capture_summary.topology_linestrip, status.capture_summary.topology_trianglelist,
-              status.capture_summary.topology_trianglestrip, status.capture_summary.topology_trianglefan,
-              status.capture_summary.topology_other);
-  ImGui::Text("last draw: prim_type=%u count=%u flags=0x%X",
-              status.capture_summary.last_draw_primitive_type, status.capture_summary.last_draw_count,
-              status.capture_summary.last_draw_flags);
+  ImGui::Text("swap source: %s", ac6::backend::ToString(diagnostics.swap_source));
+  ImGui::Text("frontbuffer / guest output: %ux%u / %ux%u",
+              diagnostics.frontbuffer_width, diagnostics.frontbuffer_height,
+              diagnostics.guest_output_width, diagnostics.guest_output_height);
+  ImGui::Text("swap source extent: %ux%u (%s)",
+              diagnostics.source_width, diagnostics.source_height,
+              diagnostics.swap_source_scaled ? "scaled" : "unscaled");
+  ImGui::Text("present classification: %s",
+              ac6::backend::ToString(diagnostics.latest_signature.classification));
+  ImGui::Text("signature: %016llX hits=%u",
+              static_cast<unsigned long long>(diagnostics.latest_signature.stable_id),
+              diagnostics.repeated_signature_count);
+  ImGui::TextWrapped("signature tags: %s",
+                     diagnostics.latest_signature_tags.empty()
+                         ? "none"
+                         : diagnostics.latest_signature_tags.c_str());
+  ImGui::Text("authoritative VS / PS: %016llX / %016llX",
+              static_cast<unsigned long long>(diagnostics.active_vertex_shader_hash),
+              static_cast<unsigned long long>(diagnostics.active_pixel_shader_hash));
+  ImGui::Text("vblank interval / last tick: %llu / %llu",
+              static_cast<unsigned long long>(diagnostics.guest_vblank_interval_ticks),
+              static_cast<unsigned long long>(diagnostics.last_guest_vblank_tick));
+  ImGui::Text("host frame time / fps: %.2f ms / %.2f",
+              diagnostics.host_frame_time_ms, diagnostics.host_fps);
+
   ImGui::Separator();
-  ImGui::Text("planned output: %ux%u", status.frame_plan.output_width,
-              status.frame_plan.output_height);
-  ImGui::Text("replay output/present: %ux%u / %s", status.replay_summary.output_width,
-              status.replay_summary.output_height,
-              status.replay_summary.has_present_pass ? "yes" : "no");
-  ImGui::Text("execution output/present: %ux%u / %s",
-              status.execution_summary.output_width, status.execution_summary.output_height,
-              status.execution_summary.has_present_pass ? "yes" : "no");
-  ImGui::Text("executor output/present: %ux%u / %s",
-              status.executor_summary.output_width, status.executor_summary.output_height,
-              status.executor_summary.has_present_pass ? "yes" : "no");
-  ImGui::Text("executor graphics/present/resource: %u / %u / %u",
-              status.executor_summary.graphics_pass_count,
-              status.executor_summary.present_pass_count,
-              status.executor_summary.resource_translation_pass_count);
-  ImGui::Text("backend consumed frame/passes/cmds: %s / %u / %u",
-              status.backend_executor_status.frame_valid ? "yes" : "no",
-              status.backend_executor_status.submitted_pass_count,
-              status.backend_executor_status.submitted_command_count);
-  ImGui::Text("backend resource/pso/descriptors: %u / %u / %u",
-              status.backend_executor_status.resource_translation_pass_count,
-              status.backend_executor_status.pipeline_state_pass_count,
-              status.backend_executor_status.descriptor_setup_pass_count);
-  ImGui::Text("stages scene/post/ui: %s / %s / %s",
-              status.frame_plan.has_scene_stage ? "yes" : "no",
-              status.frame_plan.has_post_process_stage ? "yes" : "no",
-              status.frame_plan.has_ui_stage ? "yes" : "no");
+  ImGui::Text("audio backend: %s",
+              diagnostics.audio_backend_name.empty()
+                  ? "unavailable"
+                  : diagnostics.audio_backend_name.c_str());
+  ImGui::Text("audio clients / queued / peak: %u / %u / %u",
+              diagnostics.audio_active_clients, diagnostics.audio_queued_frames,
+              diagnostics.audio_peak_queued_frames);
+  ImGui::Text("audio underruns / dropped / silence inject: %u / %u / %u",
+              diagnostics.audio_underruns, diagnostics.audio_dropped_frames,
+              diagnostics.audio_silence_injections);
+  ImGui::Text("audio consumed frames / submitted tic / host tic: %llu / %llu / %llu",
+              static_cast<unsigned long long>(diagnostics.audio_consumed_frames),
+              static_cast<unsigned long long>(diagnostics.audio_submitted_tic),
+              static_cast<unsigned long long>(diagnostics.audio_host_elapsed_tic));
+  ImGui::Text("audio startup inflight / callback dispatch / throttle: %u / %u / %u",
+              diagnostics.audio_startup_inflight_frames,
+              diagnostics.audio_callback_dispatch_count,
+              diagnostics.audio_callback_throttle_count);
+
+  if (status.mode == GraphicsRuntimeMode::kLegacyReplayExperimental) {
+    ImGui::Separator();
+    ImGui::TextUnformatted("legacy replay diagnostics (experimental):");
+    ImGui::Text("initialized: %s", status.initialized ? "true" : "false");
+    ImGui::Text("init failures seen: %s", status.had_init_failure ? "true" : "false");
+    ImGui::Text("replay backend: %s",
+                ac6::renderer::ToString(status.active_backend).data());
+    ImGui::Text("replay feature level: %s",
+                ac6::renderer::ToString(status.feature_level).data());
+    ImGui::Text("frontend / replay / execution commands: %u / %u / %u",
+                status.frontend_summary.total_command_count,
+                status.replay_summary.command_count,
+                status.execution_summary.command_count);
+    ImGui::Text("backend draw attempts / success: %u / %u",
+                status.backend_executor_status.draw_attempt_count,
+                status.backend_executor_status.draw_success_count);
+    ImGui::Text("planned output: %ux%u", status.frame_plan.output_width,
+                status.frame_plan.output_height);
+  }
 
   ImGui::End();
 }
 
 }  // namespace ac6::graphics
-

@@ -12,8 +12,9 @@ bool MetalBackend::IsSupported() const {
 #endif
 }
 
-bool MetalBackend::Initialize(const NativeRendererConfig& config) {
+bool MetalBackend::Initialize(const NativeRendererConfig& config, rex::memory::Memory* memory) {
   (void)config;
+  (void)memory;
   if (initialized_) {
     return true;
   }

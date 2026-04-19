@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include <rex/memory.h>
+
 #include "ac6_render_frontend.h"
 #include "execution_plan.h"
 #include "frame_scheduler.h"
@@ -12,8 +14,14 @@
 #include "render_graph.h"
 #include "types.h"
 
+// Forward declare so callers can access the output texture without pulling in
+// all of d3d12_backend.h transitively.
+struct ID3D12Resource;
+
 namespace ac6::renderer {
 
+// Experimental capture-replay renderer retained for diagnostics and future
+// targeted overrides. It is not the default presentation path.
 class NativeRenderer {
  public:
   NativeRenderer();
@@ -22,7 +30,8 @@ class NativeRenderer {
   NativeRenderer(const NativeRenderer&) = delete;
   NativeRenderer& operator=(const NativeRenderer&) = delete;
 
-  bool Initialize(const NativeRendererConfig& config);
+  bool Initialize(const NativeRendererConfig& config, rex::memory::Memory* memory);
+  bool InitializeShared(const NativeRendererConfig& config, rex::memory::Memory* memory, ID3D12Device* device, ID3D12CommandQueue* queue);
   void Shutdown();
 
   void BeginFrame();
@@ -47,6 +56,14 @@ class NativeRenderer {
   BackendExecutorStatus backend_executor_status() const {
     return device_.executor_status();
   }
+
+  // Phase 4: returns the native output texture produced by the D3D12 backend,
+  // or nullptr if not yet available. The texture is in
+  // D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE after SubmitExecutorFrame.
+  ID3D12Resource* GetOutputTexture() const;
+
+  // Phase 4: returns the raw D3D12Backend* (nullptr for non-D3D12 backends).
+  class D3D12Backend* GetD3D12Backend() const;
 
  private:
   NativeRendererConfig config_{};

@@ -45,6 +45,43 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none, 
 namespace {
 constexpr bool kStoreShaders = true;
 
+bool HasMeaningfulTextureFetch(const rex::system::GraphicsSwapSubmission& submission) {
+  for (uint32_t word : submission.texture_fetch) {
+    if (word != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+rex::system::GraphicsSwapSubmission MergeSwapSubmission(
+    const rex::system::GraphicsSwapSubmission& base,
+    const rex::system::GraphicsSwapSubmission& incoming) {
+  rex::system::GraphicsSwapSubmission merged = base;
+  if (incoming.frontbuffer_virtual_address) {
+    merged.frontbuffer_virtual_address = incoming.frontbuffer_virtual_address;
+  }
+  if (incoming.frontbuffer_physical_address) {
+    merged.frontbuffer_physical_address = incoming.frontbuffer_physical_address;
+  }
+  if (incoming.frontbuffer_width) {
+    merged.frontbuffer_width = incoming.frontbuffer_width;
+  }
+  if (incoming.frontbuffer_height) {
+    merged.frontbuffer_height = incoming.frontbuffer_height;
+  }
+  if (incoming.texture_format) {
+    merged.texture_format = incoming.texture_format;
+  }
+  if (incoming.color_space) {
+    merged.color_space = incoming.color_space;
+  }
+  if (HasMeaningfulTextureFetch(incoming)) {
+    merged.texture_fetch = incoming.texture_fetch;
+  }
+  return merged;
+}
+
 rex::graphics::CommandProcessor::SwapPostEffect ParseSwapPostEffect(
     const std::string& effect_name) {
   std::string lowered = effect_name;
@@ -284,9 +321,32 @@ void GraphicsSystem::SetInterruptCallback(uint32_t callback, uint32_t user_data)
   REXGPU_INFO("SetInterruptCallback({:08X}, {:08X})", callback, user_data);
 }
 
+void GraphicsSystem::SetFrameBoundaryCallback(std::function<void(rex::memory::Memory*)> callback) {
+  frame_boundary_callback_ = std::move(callback);
+}
+
 bool GraphicsSystem::HandleVideoSwap(const system::GraphicsSwapSubmission& submission) {
-  (void)submission;
+  {
+    std::lock_guard<std::mutex> lock(last_swap_submission_mutex_);
+    last_swap_submission_ = MergeSwapSubmission(last_swap_submission_, submission);
+    ++last_swap_submission_sequence_;
+  }
+  if (frame_boundary_callback_) {
+    frame_boundary_callback_(memory_);
+  }
   return false;
+}
+
+bool GraphicsSystem::GetLastSwapSubmission(system::GraphicsSwapSubmission* out_submission,
+                                           uint64_t* out_sequence) const {
+  std::lock_guard<std::mutex> lock(last_swap_submission_mutex_);
+  if (out_submission) {
+    *out_submission = last_swap_submission_;
+  }
+  if (out_sequence) {
+    *out_sequence = last_swap_submission_sequence_;
+  }
+  return last_swap_submission_sequence_ != 0;
 }
 
 void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {

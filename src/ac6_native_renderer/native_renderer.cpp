@@ -1,5 +1,6 @@
 #include "native_renderer.h"
 
+#include "backends/d3d12_backend.h"
 #include <string>
 
 #include <rex/logging.h>
@@ -48,13 +49,31 @@ NativeRenderer::~NativeRenderer() {
   Shutdown();
 }
 
-bool NativeRenderer::Initialize(const NativeRendererConfig& config) {
+bool NativeRenderer::InitializeShared(const NativeRendererConfig& config, rex::memory::Memory* memory, ID3D12Device* device, ID3D12CommandQueue* queue) {
   Shutdown();
-
   config_ = config;
   scheduler_.Configure(config_.max_frames_in_flight);
 
-  if (!device_.Initialize(config_)) {
+  if (!device_.InitializeShared(config, memory, device, queue)) {
+    return false;
+  }
+  
+  stats_.initialized = true;
+  stats_.active_backend = BackendType::kD3D12;
+  return true;
+}
+
+bool NativeRenderer::Initialize(const NativeRendererConfig& config, rex::memory::Memory* memory) {
+  REXLOG_INFO("NativeRenderer::Initialize starting");
+  Shutdown();
+
+  config_ = config;
+  REXLOG_INFO("NativeRenderer: Configuring scheduler (max_frames={})", config_.max_frames_in_flight);
+  scheduler_.Configure(config_.max_frames_in_flight);
+
+  REXLOG_INFO("NativeRenderer: Initializing render device...");
+  if (!device_.Initialize(config_, memory)) {
+    REXLOG_ERROR("NativeRenderer: device_.Initialize failed");
     return false;
   }
 
@@ -136,7 +155,7 @@ void NativeRenderer::BuildCapturedFrame(
   }
 
   stats_.built_pass_count += graph_.pass_count();
-  REXLOG_TRACE(
+  REXLOG_INFO(
       "AC6 native renderer observed frame={} frontend_passes={} replay_passes={} replay_commands={} execution_passes={} execution_commands={} executor_passes={} executor_commands={} backend_submits={} selected={} draws={} clears={} resolves={} plan_valid={} out={}x{}",
       summary.frame_index, summary.pass_count, replay_frame_.summary.pass_count,
       replay_frame_.summary.command_count, execution_plan_.summary.pass_count,
@@ -146,6 +165,25 @@ void NativeRenderer::BuildCapturedFrame(
       summary.total_draw_count, summary.total_clear_count,
       summary.total_resolve_count, frame_plan_.valid, frame_plan_.output_width,
       frame_plan_.output_height);
+}
+
+}  // namespace ac6::renderer
+
+// ---------------------------------------------------------------------------
+// Phase 4: backend accessors
+// ---------------------------------------------------------------------------
+namespace ac6::renderer {
+
+D3D12Backend* NativeRenderer::GetD3D12Backend() const {
+  if (!device_.backend() || device_.active_backend() != BackendType::kD3D12) {
+    return nullptr;
+  }
+  return static_cast<D3D12Backend*>(device_.backend());
+}
+
+ID3D12Resource* NativeRenderer::GetOutputTexture() const {
+  D3D12Backend* b = GetD3D12Backend();
+  return b ? b->GetOutputTexture() : nullptr;
 }
 
 }  // namespace ac6::renderer

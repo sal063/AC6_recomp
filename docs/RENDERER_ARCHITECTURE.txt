@@ -1,0 +1,30 @@
+AC6 renderer architecture after the pivot
+=========================================
+
+Authoritative renderer
+----------------------
+Visible rendering now defaults to the vendored RexGlue/Xenia graphics backend.
+The guest GPU command stream, the RexGlue D3D12 command processor, and the presenter remain the only authoritative presentation path in the default configuration.
+
+AC6-specific layer
+------------------
+The AC6 code in this repository sits alongside that backend and provides:
+
+- frame-boundary capture and shadow-state analysis
+- swap-path inspection and overlay reporting
+- AC6-specific pass classification and repeated-signature tracking
+- timing telemetry for host frame pacing, guest vblank cadence, and audio queue state
+- narrow extension points for future AC6 fixes and selective modding overrides
+
+Experimental replay renderer
+----------------------------
+The legacy AC6 native replay renderer is retained only as experimental tooling.
+It may still be initialized for research or selective override work, but it is not the shipping render path and it does not override presentation unless explicitly opted in at runtime.
+
+Current default runtime behavior
+--------------------------------
+- `ac6_graphics_mode=hybrid_backend_fixes`
+- `ac6_experimental_replay_present=false`
+- render capture remains enabled by default
+
+This keeps diagnostics and backend-fix infrastructure active without introducing a competing render authority.

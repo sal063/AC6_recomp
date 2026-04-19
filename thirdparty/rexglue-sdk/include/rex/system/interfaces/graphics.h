@@ -12,10 +12,14 @@
 #pragma once
 
 #include <array>
+#include <functional>
 
 #include <rex/system/xtypes.h>
 
 // Forward declarations
+namespace rex::memory {
+class Memory;
+}
 namespace rex::runtime {
 class FunctionDispatcher;
 }
@@ -52,6 +56,7 @@ class IGraphicsSystem {
   virtual void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) = 0;
   virtual void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) = 0;
   virtual void SetInterruptCallback(uint32_t callback, uint32_t user_data) = 0;
+  virtual void SetFrameBoundaryCallback(std::function<void(rex::memory::Memory*)> callback) = 0;
   virtual bool HandleVideoSwap(const GraphicsSwapSubmission& submission) = 0;
 };
 

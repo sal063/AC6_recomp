@@ -43,6 +43,7 @@ struct ObservedCommandDesc {
   uint32_t viewport_y = 0;
   uint32_t viewport_width = 0;
   uint32_t viewport_height = 0;
+  ac6::d3d::ShadowState shadow_state{};
 };
 
 struct ObservedPassDesc {

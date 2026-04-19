@@ -6,6 +6,7 @@
 #include <rex/ppc/types.h>
 
 REXCVAR_DECLARE(bool, ac6_unlock_fps);
+REXCVAR_DECLARE(bool, ac6_timing_hooks_enabled);
 
 namespace ac6 {
 

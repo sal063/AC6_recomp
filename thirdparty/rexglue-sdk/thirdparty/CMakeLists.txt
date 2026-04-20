@@ -494,7 +494,7 @@ if(IS_ARM64)
     )
 endif()
 
-target_include_directories(libavutil BEFORE PRIVATE "${FFMPEG_OVERLAY_BUILD_DIR}")
+target_include_directories(libavutil BEFORE PUBLIC "${FFMPEG_OVERLAY_BUILD_DIR}")
 
 target_include_directories(libavutil
     PUBLIC

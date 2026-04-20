@@ -24,6 +24,8 @@ mono_crash.*
 [Rr]eleases/
 x64/
 x86/
+!thirdparty/simde/simde/x86/
+!thirdparty/simde/simde/x86/**
 !thirdparty/FFmpeg/libavutil/x86/
 !thirdparty/FFmpeg/libavutil/x86/**
 !thirdparty/FFmpeg/libavcodec/x86/

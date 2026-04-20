@@ -28,7 +28,7 @@ if %errorlevel% neq 0 (
 clang --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Clang not found on PATH.
-    echo Please download LLVM/Clang from https://github.com/llvm/llvm-project/releases or via Visual Studio Installer (C++ Clang tools) and add to PATH.
+    echo Please download LLVM/Clang from https://github.com/llvm/llvm-project/releases or via Visual Studio Installer ^(C++ Clang tools^) and add to PATH.
     pause
     exit /b 1
 )

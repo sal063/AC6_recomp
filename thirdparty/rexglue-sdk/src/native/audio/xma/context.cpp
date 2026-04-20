@@ -697,8 +697,29 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
     return;
   }
 
+  auto skip_corrupt_packet = [&](const char* reason) {
+    data->error_status = 4;
+    last_error_status_ = static_cast<uint32_t>(data->error_status);
+
+    const uint32_t next_packet_index = packet_index + 1;
+    const bool next_packet_in_next_buffer = next_packet_index >= current_input_packet_count;
+    uint32_t next_input_offset =
+        GetNextPacketReadOffset(data, next_packet_index, current_input_packet_count);
+    if (next_packet_in_next_buffer || next_input_offset == kBitsPerPacketHeader) {
+      last_swapped_input_buffer_ = true;
+      SwapInputBuffer(data);
+    }
+    data->input_buffer_read_offset = next_input_offset;
+    last_input_read_offset_after_ = static_cast<uint32_t>(data->input_buffer_read_offset);
+    log_decode_state(reason);
+  };
+
   uint8_t* packet = current_input_buffer + (packet_index * kBytesPerPacket);
   const uint32_t packet_first_frame_offset = xma::GetPacketFrameOffset(packet);
+  if (packet_first_frame_offset > kMaxFrameSizeinBits) {
+    skip_corrupt_packet("packet-frame-offset-invalid");
+    return;
+  }
   uint32_t relative_offset = data->input_buffer_read_offset % kBitsPerPacket;
 
   if (relative_offset < packet_first_frame_offset) {
@@ -760,6 +781,15 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
     packet_info.current_frame_size_ = static_cast<uint32_t>(frame_size);
   }
   last_frame_size_bits_ = packet_info.current_frame_size_;
+
+  const uint32_t combined_payload_bits = (kBitsPerPacket - kBitsPerPacketHeader) * 2;
+  const uint32_t combined_relative_offset = relative_offset - kBitsPerPacketHeader;
+  if (packet_info.current_frame_size_ == 0 ||
+      combined_relative_offset > combined_payload_bits ||
+      packet_info.current_frame_size_ > (combined_payload_bits - combined_relative_offset)) {
+    skip_corrupt_packet("frame-size-out-of-range");
+    return;
+  }
 
   BitStream stream(current_input_buffer, (packet_index + 1) * kBitsPerPacket);
   stream.SetOffset(data->input_buffer_read_offset);

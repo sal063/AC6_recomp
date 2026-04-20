@@ -226,7 +226,7 @@ void SdlAudioDriver::FillStream(SDL_AudioStream* stream, int bytes_needed) {
 
       if (buffer) {
         if (!REXCVAR_GET(audio_mute)) {
-          conversion::sequential_6_BE_to_interleaved_2_LE(
+          conversion::render_driver_6_BE_to_interleaved_2_LE(
               pending_output_frame_.data(), buffer, kRenderDriverTicSamplesPerFrame);
         } else {
           std::memset(pending_output_frame_.data(), 0, sizeof(float) * pending_output_frame_.size());
@@ -247,6 +247,12 @@ void SdlAudioDriver::FillStream(SDL_AudioStream* stream, int bytes_needed) {
       ++underrun_count_;
       ++silence_injections_;
       bytes_needed -= std::min(bytes_needed, kOutputFrameBytes);
+      
+      consumed_frames_.fetch_add(1, std::memory_order_relaxed);
+      if (runtime_) {
+        runtime_->ReportSamplesConsumedForClient(client_index_, kRenderDriverTicSamplesPerFrame);
+        runtime_->WakeWorker();
+      }
       continue;
     }
 

@@ -436,7 +436,7 @@ void WasapiAudioDriver::RenderThreadMain() {
 
           if (buffer) {
             if (!REXCVAR_GET(audio_mute)) {
-              conversion::sequential_6_BE_to_interleaved_2_LE(
+              conversion::render_driver_6_BE_to_interleaved_2_LE(
                   pending_output_frame_.data(), buffer, kRenderDriverTicSamplesPerFrame);
             } else {
               std::memset(pending_output_frame_.data(), 0, sizeof(float) * pending_output_frame_.size());
@@ -464,6 +464,10 @@ void WasapiAudioDriver::RenderThreadMain() {
           ++underrun_count_;
           ++silence_injections_;
           std::memset(target, 0, sizeof(float) * 2 * frames_to_write);
+          if (runtime_) {
+            runtime_->ReportSamplesConsumedForClient(client_index_, frames_to_write);
+            runtime_->WakeWorker();
+          }
         } else {
           const size_t float_count = static_cast<size_t>(frames_to_write) * 2;
           std::memcpy(target, pending_output_frame_.data() + pending_output_float_offset_,

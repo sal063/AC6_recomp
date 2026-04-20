@@ -12,10 +12,9 @@
 
 #include <native/audio/audio_runtime.h>
 
+#include <native/audio/sdl/sdl_audio_driver.h>
 #if defined(_WIN32)
 #include <native/audio/wasapi/wasapi_audio_driver.h>
-#else
-#include <native/audio/sdl/sdl_audio_driver.h>
 #endif
 #include <rex/cvar.h>
 #include <rex/memory.h>
@@ -24,7 +23,7 @@
 
 #if defined(_WIN32)
 REXCVAR_DEFINE_STRING(audio_backend, "wasapi", "Audio", "Audio backend: wasapi")
-    .allowed({"wasapi"})
+    .allowed({"wasapi", "sdl"})
 #else
 REXCVAR_DEFINE_STRING(audio_backend, "sdl", "Audio", "Audio backend: sdl")
     .allowed({"sdl"})
@@ -51,6 +50,9 @@ namespace {
 std::unique_ptr<AudioDriver> CreateConfiguredDriver(memory::Memory* memory, AudioRuntime* runtime,
                                                     const size_t client_index) {
 #if defined(_WIN32)
+  if (REXCVAR_GET(audio_backend) == "sdl") {
+    return std::make_unique<sdl::SdlAudioDriver>(memory, runtime, client_index);
+  }
   return std::make_unique<wasapi::WasapiAudioDriver>(memory, runtime, client_index);
 #else
   return std::make_unique<sdl::SdlAudioDriver>(memory, runtime, client_index);
@@ -136,8 +138,8 @@ AudioDriverTelemetry MergeDriverTelemetry(const AudioClientState& client) {
   return merged;
 }
 
-bool StartupConsumptionObserved(const AudioClientState& client) {
-  return client.clock.consumed_samples() != 0;
+bool QueuedPlaybackObserved(const AudioClientState& client) {
+  return client.queued_played_frames != 0;
 }
 
 uint32_t StartupInflightFrames(const AudioClientState& client) {
@@ -179,7 +181,10 @@ bool ShouldThrottleStartupCallback(const AudioClientState& client,
     *out_spacing_remaining_ms = 0;
   }
 
-  if (StartupConsumptionObserved(client)) {
+  // Keep startup serialization active until the host has drained at least one
+  // queued render-driver frame. Host-injected underrun silence should advance
+  // tic timing, but it must not release callback pacing on its own.
+  if (QueuedPlaybackObserved(client)) {
     return false;
   }
 
@@ -244,6 +249,7 @@ AudioClientTimingSnapshot BuildTimingSnapshot(const AudioClientState& client) {
   AudioClientTimingSnapshot snapshot;
   snapshot.consumed_samples = client.clock.consumed_samples();
   snapshot.consumed_frames = client.clock.consumed_frames();
+  snapshot.queued_played_frames = client.queued_played_frames;
   snapshot.submitted_tic = SubmittedTicSamples(client);
   snapshot.startup_cap_tic = StartupTicCapSamples(client);
   snapshot.synthetic_startup_tic = ComputeStartupSyntheticTic(client);
@@ -562,6 +568,7 @@ bool AudioRuntime::ConsumeNextFrameForClient(const size_t index, AudioFrame* out
 
   AudioFrame frame = client.queued_frames.front();
   client.queued_frames.pop_front();
+  ++client.queued_played_frames;
   client.telemetry.queued_depth = static_cast<uint32_t>(client.queued_frames.size());
   trace_buffer_.Record(AudioTraceSubsystem::kCore, AudioTraceEventType::kFrameConsumed,
                        static_cast<uint32_t>(index), frame.guest_submit_ptr,
@@ -765,6 +772,7 @@ size_t AudioRuntime::ConsumeQueuedFramesForClient(const size_t index, const size
   while (consumed < max_frames && !client.queued_frames.empty()) {
     const AudioFrame frame = client.queued_frames.front();
     client.queued_frames.pop_front();
+    ++client.queued_played_frames;
     client.telemetry.last_consume_ticks = static_cast<uint64_t>(NextTickLocked());
     client.telemetry.queued_depth = static_cast<uint32_t>(client.queued_frames.size());
     client.telemetry.consumed_frames =
@@ -823,9 +831,10 @@ void AudioRuntime::WorkerThreadMain() {
 
     // Check each active client and dispatch callbacks to fill queue to target
     for (size_t i = 0; i < clients_.size(); ++i) {
-      // Before the first real playback consumption, keep callback lead tightly
-      // serialized so guest-side movie/cutscene workers cannot sprint ahead of
-      // the render driver on timeout wakes alone.
+      // Before the host drains the first queued render-driver frame, keep
+      // callback lead tightly serialized so guest-side movie/cutscene workers
+      // cannot sprint ahead on timeout wakes or underrun-silence progress
+      // alone.
       uint32_t dispatch = 0;
       while (true) {
         uint32_t client_callback = 0;
@@ -846,7 +855,7 @@ void AudioRuntime::WorkerThreadMain() {
             break;
           }
           target = EffectiveCallbackTargetQueueDepth(clients_[i]);
-          startup_mode = clients_[i].telemetry.callback_dispatch_count == 0;
+          startup_mode = !QueuedPlaybackObserved(clients_[i]);
           callback_limit = startup_mode ? 1u : target;
           if (dispatch >= callback_limit) {
             break;
@@ -981,13 +990,13 @@ void AudioRuntime::WorkerThreadMain() {
         const auto& c = clients_[i];
         REXAPU_INFO(
             "AudioRuntime startup: iter={} client={} queued={} target={} low_water={} "
-            "submitted={} consumed={} underruns={} callbacks={} tic={} synthetic_tic={} "
+            "submitted={} consumed={} queued_played={} underruns={} callbacks={} tic={} synthetic_tic={} "
             "submitted_tic={} startup_cap_tic={} startup_inflight={} callback_throttles={} "
             "callback_empty={} last_callback_frames={} last_callback_us={} peak={} drift_ms={:.1f}",
             worker_iteration_count_, i, c.queued_frames.size(),
             EffectiveCallbackTargetQueueDepth(c), EffectiveCallbackLowWaterFrames(c),
-            c.telemetry.submitted_frames, c.telemetry.consumed_frames, c.telemetry.underrun_count,
-            c.telemetry.callback_dispatch_count, ComputeRenderDriverTic(c),
+            c.telemetry.submitted_frames, c.telemetry.consumed_frames, c.queued_played_frames,
+            c.telemetry.underrun_count, c.telemetry.callback_dispatch_count, ComputeRenderDriverTic(c),
             ComputeStartupSyntheticTic(c), SubmittedTicSamples(c), StartupTicCapSamples(c),
             StartupInflightFrames(c), c.telemetry.callback_throttle_count,
             c.telemetry.callback_empty_count, c.telemetry.last_callback_produced_frames,
@@ -1005,12 +1014,12 @@ void AudioRuntime::WorkerThreadMain() {
         const auto& c = clients_[i];
         REXAPU_DEBUG(
             "AudioRuntime periodic: client={} queued={} target={} low_water={} submitted={} "
-            "consumed={} underruns={} callbacks={} tic={} synthetic_tic={} submitted_tic={} "
+            "consumed={} queued_played={} underruns={} callbacks={} tic={} synthetic_tic={} submitted_tic={} "
             "startup_cap_tic={} startup_inflight={} callback_throttles={} callback_empty={} "
             "last_callback_frames={} last_callback_us={} peak={} drift_ms={:.1f}",
             i, c.queued_frames.size(), EffectiveCallbackTargetQueueDepth(c),
             EffectiveCallbackLowWaterFrames(c), c.telemetry.submitted_frames,
-            c.telemetry.consumed_frames, c.telemetry.underrun_count,
+            c.telemetry.consumed_frames, c.queued_played_frames, c.telemetry.underrun_count,
             c.telemetry.callback_dispatch_count, ComputeRenderDriverTic(c),
             ComputeStartupSyntheticTic(c), SubmittedTicSamples(c), StartupTicCapSamples(c),
             StartupInflightFrames(c), c.telemetry.callback_throttle_count,

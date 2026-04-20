@@ -96,6 +96,7 @@ void AnalyzeFrameBoundary(
   if (audio_timing) {
     g_snapshot.audio_timing_valid = true;
     g_snapshot.audio_consumed_frames = audio_timing->consumed_frames;
+    g_snapshot.audio_queued_played_frames = audio_timing->queued_played_frames;
     g_snapshot.audio_submitted_tic = audio_timing->submitted_tic;
     g_snapshot.audio_host_elapsed_tic = audio_timing->host_elapsed_tic;
     g_snapshot.audio_startup_inflight_frames = audio_timing->startup_inflight_frames;
@@ -104,6 +105,7 @@ void AnalyzeFrameBoundary(
   } else {
     g_snapshot.audio_timing_valid = false;
     g_snapshot.audio_consumed_frames = 0;
+    g_snapshot.audio_queued_played_frames = 0;
     g_snapshot.audio_submitted_tic = 0;
     g_snapshot.audio_host_elapsed_tic = 0;
     g_snapshot.audio_startup_inflight_frames = 0;
@@ -122,11 +124,13 @@ void AnalyzeFrameBoundary(
 
   if (ShouldLogSignature(g_snapshot)) {
     REXLOG_INFO(
-        "AC6 backend signature frame={} class={} id={:016X} hits={} tags={} draws={} resolves={}",
+        "AC6 backend signature frame={} class={} id={:016X} hits={} tags={} draws={} resolves={} viewport={}x{} pointlist={}",
         g_snapshot.frame_index, ToString(g_snapshot.latest_signature.classification),
         g_snapshot.latest_signature.stable_id, g_snapshot.repeated_signature_count,
         g_snapshot.latest_signature_tags, g_snapshot.capture_draw_count,
-        g_snapshot.capture_resolve_count);
+        g_snapshot.capture_resolve_count, g_snapshot.latest_signature.viewport_width,
+        g_snapshot.latest_signature.viewport_height,
+        g_snapshot.latest_signature.topology_pointlist_count);
   }
 }
 

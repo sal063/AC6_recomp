@@ -62,6 +62,7 @@ struct AudioClientState {
   uint32_t callback_arg{0};
   uint32_t wrapped_callback_arg{0};
   uint64_t next_sequence_number{1};
+  uint64_t queued_played_frames{0};
   AudioDriverTelemetry telemetry{};
   AudioClock clock{};
   AudioDriver* driver{nullptr};

@@ -15,6 +15,7 @@ enum class SignatureClass : uint8_t {
   kPostProcess,
   kUiComposite,
   kParticles,
+  kPointSpriteEffects,
   kClouds,
   kSmoke,
   kExplosions,
@@ -34,8 +35,16 @@ struct RenderEventSignature {
   uint32_t resolve_count = 0;
   uint32_t indexed_draw_count = 0;
   uint32_t primitive_draw_count = 0;
+  uint32_t topology_pointlist_count = 0;
   uint32_t texture_count = 0;
   uint32_t sampler_count = 0;
+  uint32_t point_min_sampler_count = 0;
+  uint32_t linear_min_sampler_count = 0;
+  uint32_t point_mip_sampler_count = 0;
+  uint32_t linear_mip_sampler_count = 0;
+  uint32_t anisotropic_sampler_count = 0;
+  uint32_t mip_clamp_sampler_count = 0;
+  uint32_t max_sampler_mip_level = 0;
   uint32_t stream_count = 0;
   uint32_t fetch_constant_count = 0;
   uint32_t shader_gpr_alloc = 0;
@@ -44,9 +53,13 @@ struct RenderEventSignature {
   bool has_depth_stencil = false;
   bool has_resolve = false;
   bool half_res_like = false;
+  bool quarter_res_like = false;
   bool post_process_like = false;
   bool ui_like = false;
   bool particle_like = false;
+  bool point_sprite_like = false;
+  bool point_filtered_like = false;
+  bool mip_clamped_like = false;
   bool additive_like = false;
   SignatureClass classification = SignatureClass::kUnknown;
 };

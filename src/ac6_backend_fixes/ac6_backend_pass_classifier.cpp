@@ -11,6 +11,9 @@ SignatureClass ClassifySignature(const RenderEventSignature& signature) {
       signature.viewport_width >= signature.viewport_height * 2) {
     return SignatureClass::kMissileTrails;
   }
+  if (signature.point_sprite_like) {
+    return SignatureClass::kPointSpriteEffects;
+  }
   if (signature.half_res_like && signature.post_process_like &&
       signature.sampler_count >= 4 && signature.fetch_constant_count >= 2) {
     return SignatureClass::kClouds;
@@ -43,6 +46,8 @@ const char* ToString(const SignatureClass signature_class) {
       return "ui_composite";
     case SignatureClass::kParticles:
       return "particles";
+    case SignatureClass::kPointSpriteEffects:
+      return "point_sprite_effects";
     case SignatureClass::kClouds:
       return "clouds";
     case SignatureClass::kSmoke:

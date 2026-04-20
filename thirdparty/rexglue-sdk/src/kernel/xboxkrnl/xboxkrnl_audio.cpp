@@ -185,13 +185,14 @@ ppc_u32_result_t XAudioGetRenderDriverTic_entry(ppc_pvoid_t driver_ptr) {
       REXKRNL_DEBUG(
           "XAudioGetRenderDriverTic driver={:08X} guest_tic=0 internal_tic={} "
           "submitted={} consumed={} queued_depth={} underruns={} callbacks={} "
-          "callback_throttles={} clock_samples={} clock_frames={} submitted_tic={} "
+          "callback_throttles={} clock_samples={} clock_frames={} queued_played={} submitted_tic={} "
           "synthetic_tic={} startup_cap_tic={} startup_inflight={} callback_floor_tic={} "
           "host_elapsed_tic={}",
           driver_handle, internal_tic, telemetry.submitted_frames,
           telemetry.consumed_frames, telemetry.queued_depth, telemetry.underrun_count,
           telemetry.callback_dispatch_count, telemetry.callback_throttle_count,
-          timing.consumed_samples, timing.consumed_frames, timing.submitted_tic,
+          timing.consumed_samples, timing.consumed_frames, timing.queued_played_frames,
+          timing.submitted_tic,
           timing.synthetic_startup_tic, timing.startup_cap_tic,
           timing.startup_inflight_frames, timing.callback_floor_tic,
           timing.host_elapsed_tic);

@@ -1,0 +1,156 @@
+From fba68dadef0d9026a795ba27f4d97841aa533009 Mon Sep 17 00:00:00 2001
+From: Ryan Fisher <ryanfisher099@gmail.com>
+Date: Sun, 22 Mar 2026 09:54:45 -0400
+Subject: [PATCH] fix(audio): SDL startup and export XMA constants
+
+- Export the XmaContext packet header and output size constants so Fable 2 can link against the XMA audio runtime correctly
+- Harden SDL audio device startup by validating format detection, stereo fallback reopening, and device resume before playback begins
+- Prevent SDL callback stalls when no audio frames are queued by feeding silence and checking stream writes instead of spinning indefinitely
+---
+ src/audio/sdl/sdl_audio_driver.cpp | 62 +++++++++++++++++++++++++-----
+ src/audio/xma_context.cpp          |  3 ++
+ 2 files changed, 56 insertions(+), 9 deletions(-)
+
+diff --git a/src/native/audio/sdl/sdl_audio_driver.cpp b/src/native/audio/sdl/sdl_audio_driver.cpp
+index 932ceaaf..46719f3a 100644
+--- a/src/native/audio/sdl/sdl_audio_driver.cpp
++++ b/src/native/audio/sdl/sdl_audio_driver.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <algorithm>
+ #include <array>
+ #include <cstring>
+ 
+@@ -51,7 +52,7 @@ bool SDLAudioDriver::Initialize() {
+   sdl_initialized_ = true;
+ 
+   SDL_AudioSpec desired_spec = {};
+-  SDL_AudioSpec obtained_spec;
++  SDL_AudioSpec obtained_spec = {};
+   desired_spec.freq = frame_frequency_;
+   desired_spec.format = SDL_AUDIO_F32LE;
+   desired_spec.channels = frame_channels_;
+@@ -59,18 +60,43 @@ bool SDLAudioDriver::Initialize() {
+   sdl_stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &desired_spec,
+                                           SDLCallback, this);
+   if (!sdl_stream_) {
+-    REXAPU_ERROR("SDL_OpenAudioDevice() failed: {}", SDL_GetError());
++    REXAPU_ERROR("SDL_OpenAudioDeviceStream() failed: {}", SDL_GetError());
+     return false;
+   }
+-  SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(sdl_stream_), &obtained_spec, NULL);
++
++  SDL_AudioDeviceID sdl_device = SDL_GetAudioStreamDevice(sdl_stream_);
++  if (!sdl_device) {
++    REXAPU_ERROR("SDL_GetAudioStreamDevice() failed: {}", SDL_GetError());
++    return false;
++  }
++
++  if (!SDL_GetAudioDeviceFormat(sdl_device, &obtained_spec, NULL)) {
++    REXAPU_WARN("SDL_GetAudioDeviceFormat() failed: {}", SDL_GetError());
++    obtained_spec = desired_spec;
++  }
++
+   if (obtained_spec.channels == 2) {
+     SDL_DestroyAudioStream(sdl_stream_);
++    sdl_stream_ = nullptr;
+     desired_spec.channels = 2;
+     sdl_device_channels_ = 2;
+     sdl_stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &desired_spec,
+                                             SDLCallback, this);
++    if (!sdl_stream_) {
++      REXAPU_ERROR("SDL_OpenAudioDeviceStream() stereo fallback failed: {}", SDL_GetError());
++      return false;
++    }
++    sdl_device = SDL_GetAudioStreamDevice(sdl_stream_);
++    if (!sdl_device) {
++      REXAPU_ERROR("SDL_GetAudioStreamDevice() failed after stereo fallback: {}", SDL_GetError());
++      return false;
++    }
++  }
++
++  if (!SDL_ResumeAudioDevice(sdl_device)) {
++    REXAPU_ERROR("SDL_ResumeAudioDevice() failed: {}", SDL_GetError());
++    return false;
+   }
+-  SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(sdl_stream_));
+ 
+   return true;
+ }
+@@ -125,15 +151,21 @@ void SDLAudioDriver::Shutdown() {
+ }
+ 
+ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int additional_amount,
+-                                 int total_amount) {
++                                 [[maybe_unused]] int total_amount) {
+   SCOPE_profile_cpu_f("apu");
+   if (!userdata || !stream) {
+     REXAPU_ERROR("SDLAudioDriver::SDLCallback called with nullptr.");
+     return;
+   }
+   const auto driver = static_cast<SDLAudioDriver*>(userdata);
+-  const int len = static_cast<int>(sizeof(float) * channel_samples_ * driver->sdl_device_channels_);
+-  float* data = SDL_stack_alloc(float, len);
++  const int sample_count =
++      static_cast<int>(channel_samples_ * std::max<uint8_t>(driver->sdl_device_channels_, 1));
++  const int len = static_cast<int>(sizeof(float) * sample_count);
++  float* data = SDL_stack_alloc(float, sample_count);
++  if (!data) {
++    REXAPU_ERROR("SDLAudioDriver::SDLCallback failed to allocate {} samples", sample_count);
++    return;
++  }
+   while (additional_amount > 0) {
+     static uint32_t sdl_callback_count = 0;
+     std::unique_lock<std::mutex> guard(driver->frames_mutex_);
+@@ -142,10 +174,18 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+         REXAPU_DEBUG("SDLCallback: no frames queued (silence)");
+         sdl_callback_count++;
+       }
++      std::memset(data, 0, len);
++      if (!SDL_PutAudioStreamData(stream, data, len)) {
++        REXAPU_ERROR("SDL_PutAudioStreamData() failed while filling silence: {}", SDL_GetError());
++        break;
++      }
++      additional_amount -= len;
+     } else {
+       auto buffer = driver->frames_queued_.front();
+       driver->frames_queued_.pop();
+-      if (!REXCVAR_GET(audio_mute)) {
++      if (REXCVAR_GET(audio_mute)) {
++        std::memset(data, 0, len);
++      } else {
+         switch (driver->sdl_device_channels_) {
+           case 2:
+             conversion::sequential_6_BE_to_interleaved_2_LE(data, buffer, channel_samples_);
+@@ -157,7 +197,11 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+             assert_unhandled_case(driver->sdl_device_channels_);
+             break;
+         }
+-        SDL_PutAudioStreamData(stream, data, len);
++      }
++      if (!SDL_PutAudioStreamData(stream, data, len)) {
++        REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
++        driver->frames_unused_.push(buffer);
++        break;
+       }
+       driver->frames_unused_.push(buffer);
+ 
+diff --git a/src/native/audio/xma/context.cpp b/src/native/audio/xma/context.cpp
+index 9b4fb07d..eafb4105 100644
+--- a/src/native/audio/xma/context.cpp
++++ b/src/native/audio/xma/context.cpp
+@@ -40,6 +40,9 @@ namespace rex::audio {
+ 
+ using stream::BitStream;
+ 
++const uint32_t XmaContext::kBitsPerPacketHeader;
++const uint32_t XmaContext::kOutputMaxSizeBytes;
++
+ XmaContext::XmaContext()
+     : work_completion_event_(rex::thread::Event::CreateAutoResetEvent(false)) {}
+ 
+-- 
+2.52.0.windows.1
+

@@ -51,6 +51,7 @@ struct AudioTelemetrySnapshot {
 struct AudioClientTimingSnapshot {
   uint64_t consumed_samples{0};
   uint64_t consumed_frames{0};
+  uint64_t queued_played_frames{0};
   uint64_t submitted_tic{0};
   uint64_t startup_cap_tic{0};
   uint64_t synthetic_startup_tic{0};

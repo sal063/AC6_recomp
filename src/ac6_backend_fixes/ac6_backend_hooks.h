@@ -56,6 +56,7 @@ struct BackendDiagnosticsSnapshot {
   uint64_t guest_vblank_interval_ticks = 0;
   uint64_t last_guest_vblank_tick = 0;
   uint64_t audio_consumed_frames = 0;
+  uint64_t audio_queued_played_frames = 0;
   uint64_t audio_submitted_tic = 0;
   uint64_t audio_host_elapsed_tic = 0;
   double host_frame_time_ms = 0.0;

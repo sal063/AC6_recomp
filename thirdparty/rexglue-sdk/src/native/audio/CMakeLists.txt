@@ -3,6 +3,7 @@
 add_library(rexaudio STATIC
     audio_driver.cpp
     audio_clock.cpp
+    render_driver_frame_layout.cpp
     audio_runtime.cpp
     audio_system.cpp
     audio_trace.cpp
@@ -16,6 +17,7 @@ add_library(rex::audio ALIAS rexaudio)
 if(WIN32)
     target_sources(rexaudio PRIVATE
         wasapi/wasapi_audio_driver.cpp
+        sdl/sdl_audio_driver.cpp
     )
 else()
     target_sources(rexaudio PRIVATE
@@ -33,7 +35,7 @@ target_link_libraries(rexaudio
 )
 
 if(WIN32)
-    target_link_libraries(rexaudio PUBLIC ole32 avrt uuid)
+    target_link_libraries(rexaudio PUBLIC ole32 avrt uuid SDL3::SDL3)
 else()
     target_link_libraries(rexaudio PUBLIC SDL3::SDL3)
 endif()

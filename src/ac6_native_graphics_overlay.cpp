@@ -69,6 +69,27 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
   ImGui::Text("signature: %016llX hits=%u",
               static_cast<unsigned long long>(diagnostics.latest_signature.stable_id),
               diagnostics.repeated_signature_count);
+  const uint32_t signature_viewport_width = diagnostics.latest_signature.viewport_width;
+  const uint32_t signature_viewport_height = diagnostics.latest_signature.viewport_height;
+  const uint32_t viewport_scale_x = diagnostics.frontbuffer_width
+                                        ? (signature_viewport_width * 100) /
+                                              diagnostics.frontbuffer_width
+                                        : 0;
+  const uint32_t viewport_scale_y = diagnostics.frontbuffer_height
+                                        ? (signature_viewport_height * 100) /
+                                              diagnostics.frontbuffer_height
+                                        : 0;
+  ImGui::Text("signature viewport: %ux%u (%u%% x %u%% of frontbuffer)",
+              signature_viewport_width, signature_viewport_height,
+              viewport_scale_x, viewport_scale_y);
+  ImGui::Text("signature point-list / primitive draws: %u / %u",
+              diagnostics.latest_signature.topology_pointlist_count,
+              diagnostics.latest_signature.primitive_draw_count);
+  ImGui::Text("effect hints: half_res=%s quarter_res=%s point_sprites=%s additive=%s",
+              diagnostics.latest_signature.half_res_like ? "yes" : "no",
+              diagnostics.latest_signature.quarter_res_like ? "yes" : "no",
+              diagnostics.latest_signature.point_sprite_like ? "yes" : "no",
+              diagnostics.latest_signature.additive_like ? "yes" : "no");
   ImGui::TextWrapped("signature tags: %s",
                      diagnostics.latest_signature_tags.empty()
                          ? "none"
@@ -93,9 +114,11 @@ void NativeGraphicsStatusDialog::OnDraw(ImGuiIO& io) {
   ImGui::Text("audio underruns / dropped / silence inject: %u / %u / %u",
               diagnostics.audio_underruns, diagnostics.audio_dropped_frames,
               diagnostics.audio_silence_injections);
-  ImGui::Text("audio consumed frames / submitted tic / host tic: %llu / %llu / %llu",
+  ImGui::Text("audio consumed / queued-played / submitted tic: %llu / %llu / %llu",
               static_cast<unsigned long long>(diagnostics.audio_consumed_frames),
-              static_cast<unsigned long long>(diagnostics.audio_submitted_tic),
+              static_cast<unsigned long long>(diagnostics.audio_queued_played_frames),
+              static_cast<unsigned long long>(diagnostics.audio_submitted_tic));
+  ImGui::Text("audio host tic: %llu",
               static_cast<unsigned long long>(diagnostics.audio_host_elapsed_tic));
   ImGui::Text("audio startup inflight / callback dispatch / throttle: %u / %u / %u",
               diagnostics.audio_startup_inflight_frames,

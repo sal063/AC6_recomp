@@ -12,6 +12,7 @@ REXCVAR_DECLARE(bool, ac6_unlock_fps);
 REXCVAR_DECLARE(bool, ac6_native_graphics_enabled);
 REXCVAR_DECLARE(bool, ac6_experimental_replay_present);
 REXCVAR_DECLARE(std::string, ac6_graphics_mode);
+REXCVAR_DECLARE(int32_t, resolution_scale);
 REXCVAR_DECLARE(std::string, log_file);
 REXCVAR_DECLARE(std::string, log_level);
 
@@ -45,6 +46,7 @@ std::unique_ptr<rex::ui::WindowedApp> Ac6recompAppCreate(rex::ui::WindowedAppCon
     // Force SDK logging to a file as well
     REXCVAR_SET(log_file, "ac6recomp.log");
     REXCVAR_SET(log_level, "info");
+    REXCVAR_SET(resolution_scale, 1);
     REXCVAR_SET(ac6_unlock_fps, false);
     
     REXLOG_INFO("Ac6recompAppCreate: graphics mode={} replay_present={} capture={}",

@@ -561,6 +561,10 @@ class TextureCache {
 
   void UpdateTexturesTotalHostMemoryUsage(uint64_t add, uint64_t subtract);
 
+  // Updates the scaled-resolve bit in the key based on the current resolved
+  // guest-memory page tracking.
+  void ApplyScaledResolveState(TextureKey& key);
+
   // Shared memory callback for texture data invalidation.
   static void WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock,
                             void* context, void* data, uint64_t argument, bool invalidated_by_gpu);

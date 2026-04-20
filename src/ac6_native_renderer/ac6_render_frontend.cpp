@@ -5,6 +5,17 @@
 namespace ac6::renderer {
 namespace {
 
+void HashU32(uint64_t& hash, uint32_t value) {
+  constexpr uint64_t kFnvPrime = 1099511628211ull;
+  hash ^= value;
+  hash *= kFnvPrime;
+}
+
+void HashU64(uint64_t& hash, uint64_t value) {
+  HashU32(hash, uint32_t(value & 0xFFFFFFFFull));
+  HashU32(hash, uint32_t(value >> 32));
+}
+
 template <typename Container>
 uint32_t CountNonZeroEntries(const Container& values) {
   uint32_t count = 0;
@@ -14,6 +25,23 @@ uint32_t CountNonZeroEntries(const Container& values) {
     }
   }
   return count;
+}
+
+template <size_t N>
+ObservedPassDesc::BoundResourceSample SampleBoundEntries(
+    const std::array<uint32_t, N>& values) {
+  ObservedPassDesc::BoundResourceSample sample;
+  for (uint32_t slot = 0; slot < values.size(); ++slot) {
+    if (!values[slot]) {
+      continue;
+    }
+    if (sample.count < sample.values.size()) {
+      sample.slots[sample.count] = slot;
+      sample.values[sample.count] = values[slot];
+    }
+    ++sample.count;
+  }
+  return sample;
 }
 
 uint32_t CountBoundStreams(
@@ -273,9 +301,44 @@ FrontendFrameSummary Ac6RenderFrontend::BuildFromCapture(
       current_pass.viewport_y = event.shadow_state->viewport.y;
       current_pass.viewport_width = event.shadow_state->viewport.width;
       current_pass.viewport_height = event.shadow_state->viewport.height;
+      current_pass.first_vertex_fetch_layout_signature =
+          event.shadow_state->vertex_fetch_layout_signature;
+      current_pass.last_vertex_fetch_layout_signature =
+          event.shadow_state->vertex_fetch_layout_signature;
+      current_pass.first_texture_fetch_layout_signature =
+          event.shadow_state->texture_fetch_layout_signature;
+      current_pass.last_texture_fetch_layout_signature =
+          event.shadow_state->texture_fetch_layout_signature;
+      current_pass.first_resource_binding_signature =
+          event.shadow_state->resource_binding_signature;
+      current_pass.last_resource_binding_signature =
+          event.shadow_state->resource_binding_signature;
+      current_pass.first_textures = SampleBoundEntries(event.shadow_state->textures);
+      current_pass.last_textures = current_pass.first_textures;
+      current_pass.first_fetch_constants =
+          SampleBoundEntries(event.shadow_state->texture_fetch_ptrs);
+      current_pass.last_fetch_constants = current_pass.first_fetch_constants;
+      constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ull;
+      current_pass.pass_signature = kFnvOffsetBasis;
     }
 
     current_pass.end_sequence = event.sequence;
+    HashU32(current_pass.pass_signature, static_cast<uint32_t>(event.type));
+    HashU32(current_pass.pass_signature, event.sequence);
+    HashU64(current_pass.pass_signature, event.shadow_state->vertex_fetch_layout_signature);
+    HashU64(current_pass.pass_signature, event.shadow_state->texture_fetch_layout_signature);
+    HashU64(current_pass.pass_signature, event.shadow_state->resource_binding_signature);
+    current_pass.last_vertex_fetch_layout_signature =
+        event.shadow_state->vertex_fetch_layout_signature;
+    current_pass.last_texture_fetch_layout_signature =
+        event.shadow_state->texture_fetch_layout_signature;
+    current_pass.last_resource_binding_signature =
+        event.shadow_state->resource_binding_signature;
+    current_pass.last_textures = SampleBoundEntries(event.shadow_state->textures);
+    current_pass.last_fetch_constants =
+        SampleBoundEntries(event.shadow_state->texture_fetch_ptrs);
+    current_pass.max_shader_gpr_alloc =
+        std::max(current_pass.max_shader_gpr_alloc, event.shadow_state->shader_gpr_alloc);
     switch (event.type) {
       case CapturedFrameEventType::kDraw:
         ++current_pass.draw_count;

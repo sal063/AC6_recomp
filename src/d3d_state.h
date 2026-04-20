@@ -149,6 +149,8 @@ struct ClearRecord {
 
 struct ResolveRecord {
     uint32_t sequence{0};
+    std::array<uint32_t, 7> args{};
+    float depth_or_scale{0.0f};
     ShadowState shadow_state{};
 };
 

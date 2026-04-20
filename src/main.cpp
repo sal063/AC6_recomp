@@ -45,12 +45,7 @@ std::unique_ptr<rex::ui::WindowedApp> Ac6recompAppCreate(rex::ui::WindowedAppCon
     // Force SDK logging to a file as well
     REXCVAR_SET(log_file, "ac6recomp.log");
     REXCVAR_SET(log_level, "info");
-    REXCVAR_SET(ac6_native_graphics_enabled, true);
-    REXCVAR_SET(ac6_graphics_mode, "hybrid_backend_fixes");
-    REXCVAR_SET(ac6_experimental_replay_present, false);
-    REXCVAR_SET(ac6_render_capture, true);
-    REXCVAR_SET(ac6_timing_hooks_enabled, true);
-    REXCVAR_SET(ac6_unlock_fps, true);
+    REXCVAR_SET(ac6_unlock_fps, false);
     
     REXLOG_INFO("Ac6recompAppCreate: graphics mode={} replay_present={} capture={}",
                 REXCVAR_GET(ac6_graphics_mode),

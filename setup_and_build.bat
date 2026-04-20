@@ -118,6 +118,31 @@ echo.
 echo =========================================
 echo Building the Game
 echo =========================================
+echo Step 1: Configuring...
+cmake --preset win-amd64-relwithdebinfo
+if !errorlevel! neq 0 (
+    echo [ERROR] Configuration failed.
+    pause
+    exit /b 1
+)
+
+echo Step 2: Generating recompiled code...
+cmake --build --preset win-amd64-relwithdebinfo --target ac6recomp_codegen
+if !errorlevel! neq 0 (
+    echo [ERROR] Codegen failed.
+    pause
+    exit /b 1
+)
+
+echo Step 3: Re-configuring...
+cmake --preset win-amd64-relwithdebinfo
+if !errorlevel! neq 0 (
+    echo [ERROR] Re-configuration failed.
+    pause
+    exit /b 1
+)
+
+echo Step 4: Building the runtime...
 cmake --build --preset win-amd64-relwithdebinfo
 if !errorlevel! neq 0 (
     echo [ERROR] Build failed.

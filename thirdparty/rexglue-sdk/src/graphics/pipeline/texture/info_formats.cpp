@@ -12,6 +12,7 @@
 // clang-format off
 
 #include <rex/graphics/pipeline/texture/info.h>
+#include <rex/logging.h>
 
 namespace rex::graphics {
 
@@ -86,6 +87,13 @@ const FormatInfo* FormatInfo::Get(uint32_t gpu_format) {
       FORMAT_INFO(k_8_8_8_8_GAMMA_EDRAM      , kUncompressed, 1, 1, 32),
       FORMAT_INFO(k_2_10_10_10_FLOAT_EDRAM   , kUncompressed, 1, 1, 32),
   };
+  static const FormatInfo invalid_format_info = {
+      xenos::TextureFormat::k_8_8_8_8, "k_invalid", FormatType::kUncompressed, 1, 1, 32};
+  if (gpu_format >= (sizeof(format_infos) / sizeof(format_infos[0]))) {
+    REXGPU_ERROR("Texture format index {} is out of range; falling back to {}", gpu_format,
+                 invalid_format_info.name);
+    return &invalid_format_info;
+  }
   return &format_infos[gpu_format];
 }
 #undef FORMAT_INFO

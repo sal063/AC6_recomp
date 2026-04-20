@@ -13,6 +13,7 @@
 #include <cmath>
 
 #include <rex/graphics/pipeline/texture/info.h>
+#include <rex/logging.h>
 #include <rex/math.h>
 
 namespace rex::graphics {
@@ -46,6 +47,13 @@ static TextureExtent CalculateExtent(const FormatInfo* format_info, uint32_t pit
     uint32_t byte_pitch = extent.block_pitch_h * bytes_per_block;
 
     if (!is_tiled) {
+      if (bytes_per_block == 0) {
+        REXGPU_ERROR(
+            "TextureExtent::Calculate received linear guest texture format {} with zero "
+            "bytes_per_block (pitch={}, height={}, depth={})",
+            format_info->name, pitch, height, depth);
+        return extent;
+      }
       // Each row must be a multiple of 256 bytes in linear textures.
       byte_pitch = rex::round_up(byte_pitch, 256);
       extent.block_pitch_h = byte_pitch / bytes_per_block;

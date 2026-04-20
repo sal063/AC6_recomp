@@ -487,6 +487,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     TextureKey old_key = binding.key;
     uint8_t old_swizzled_signs = binding.swizzled_signs;
     BindingInfoFromFetchConstant(fetch, binding.key, &binding.swizzled_signs);
+    if (binding.key.is_valid) {
+      ApplyScaledResolveState(binding.key);
+    }
     texture_bindings_in_sync_ |= index_bit;
     if (!binding.key.is_valid) {
       if (old_key.is_valid) {
@@ -754,19 +757,25 @@ void TextureCache::DestroyAllTextures(bool from_destructor) {
   COUNT_profile_set("gpu/texture_cache/textures", 0);
 }
 
-TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
-  // Check if the texture is a scaled resolve texture.
-  if (IsDrawResolutionScaled() && key.tiled && IsScaledResolveSupportedForFormat(key)) {
-    texture_util::TextureGuestLayout scaled_resolve_guest_layout = key.GetGuestLayout();
-    if ((scaled_resolve_guest_layout.base.level_data_extent_bytes &&
-         IsRangeScaledResolved(key.base_page << 12,
-                               scaled_resolve_guest_layout.base.level_data_extent_bytes)) ||
-        (scaled_resolve_guest_layout.mips_total_extent_bytes &&
-         IsRangeScaledResolved(key.mip_page << 12,
-                               scaled_resolve_guest_layout.mips_total_extent_bytes))) {
-      key.scaled_resolve = 1;
-    }
+void TextureCache::ApplyScaledResolveState(TextureKey& key) {
+  key.scaled_resolve = 0;
+  if (!IsDrawResolutionScaled() || !key.tiled || !IsScaledResolveSupportedForFormat(key)) {
+    return;
   }
+
+  texture_util::TextureGuestLayout scaled_resolve_guest_layout = key.GetGuestLayout();
+  if ((scaled_resolve_guest_layout.base.level_data_extent_bytes &&
+       IsRangeScaledResolved(key.base_page << 12,
+                             scaled_resolve_guest_layout.base.level_data_extent_bytes)) ||
+      (scaled_resolve_guest_layout.mips_total_extent_bytes &&
+       IsRangeScaledResolved(key.mip_page << 12,
+                             scaled_resolve_guest_layout.mips_total_extent_bytes))) {
+    key.scaled_resolve = 1;
+  }
+}
+
+TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+  ApplyScaledResolveState(key);
 
   auto get_host_extent = [this, &key](uint32_t& host_width_out, uint32_t& host_height_out,
                                       uint32_t& host_depth_or_array_size_out) {

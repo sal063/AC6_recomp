@@ -1,10 +1,13 @@
 #include "ac6_native_graphics.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <string_view>
 
 #include <native/audio/audio_system.h>
 #include <rex/cvar.h>
+#include <rex/graphics/flags.h>
 #include <rex/graphics/graphics_system.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
@@ -38,8 +41,11 @@ namespace ac6::graphics {
 namespace {
 
 ac6::renderer::NativeRenderer g_native_renderer;
+ac6::renderer::Ac6RenderFrontend g_capture_frontend;
+ac6::renderer::FramePlanner g_capture_frame_planner;
 NativeGraphicsRuntimeStatus g_runtime_status{};
 ac6::renderer::D3D12Backend* g_d3d12_backend = nullptr;
+std::atomic<rex::memory::Memory*> g_captured_memory{nullptr};
 
 GraphicsRuntimeMode ParseGraphicsMode(std::string_view value) {
   if (value == "disabled") {
@@ -77,12 +83,10 @@ void ResetReplayStatus() {
   g_runtime_status.replay_frames_built = 0;
   g_runtime_status.active_backend = ac6::renderer::BackendType::kUnknown;
   g_runtime_status.renderer_stats = {};
-  g_runtime_status.frontend_summary = {};
   g_runtime_status.replay_summary = {};
   g_runtime_status.execution_summary = {};
   g_runtime_status.executor_summary = {};
   g_runtime_status.backend_executor_status = {};
-  g_runtime_status.frame_plan = {};
   g_runtime_status.latest_renderer_frame_index = 0;
   g_runtime_status.last_meaningful_renderer_frame_index = 0;
   g_runtime_status.showing_latched_snapshot = false;
@@ -92,6 +96,24 @@ void SyncRuntimeFlags() {
   g_runtime_status.enabled = REXCVAR_GET(ac6_native_graphics_enabled);
   g_runtime_status.mode = ParseGraphicsMode(REXCVAR_GET(ac6_graphics_mode));
   g_runtime_status.capture_enabled = REXCVAR_GET(ac6_render_capture);
+  const uint32_t shared_scale =
+      static_cast<uint32_t>(std::max(INT32_C(1), REXCVAR_GET(resolution_scale)));
+  const bool use_shared_scale = rex::cvar::HasNonDefaultValue("resolution_scale");
+  const int32_t configured_scale_x =
+      use_shared_scale && !rex::cvar::HasNonDefaultValue("draw_resolution_scale_x")
+          ? static_cast<int32_t>(shared_scale)
+          : REXCVAR_GET(draw_resolution_scale_x);
+  const int32_t configured_scale_y =
+      use_shared_scale && !rex::cvar::HasNonDefaultValue("draw_resolution_scale_y")
+          ? static_cast<int32_t>(shared_scale)
+          : REXCVAR_GET(draw_resolution_scale_y);
+  g_runtime_status.draw_resolution_scale_x =
+      static_cast<uint32_t>(std::max(INT32_C(1), configured_scale_x));
+  g_runtime_status.draw_resolution_scale_y =
+      static_cast<uint32_t>(std::max(INT32_C(1), configured_scale_y));
+  g_runtime_status.direct_host_resolve = REXCVAR_GET(direct_host_resolve);
+  g_runtime_status.draw_resolution_scaled_texture_offsets =
+      REXCVAR_GET(draw_resolution_scaled_texture_offsets);
   g_runtime_status.authoritative_renderer_active =
       g_runtime_status.enabled &&
       g_runtime_status.mode != GraphicsRuntimeMode::kDisabled;
@@ -129,6 +151,142 @@ bool IsMeaningfulRendererSnapshot(
          backend_status.draw_attempt_count != 0 ||
          backend_status.clear_command_count != 0 ||
          backend_status.resolve_command_count != 0;
+}
+
+uint32_t ScoreObservedPassForDiagnostics(const ac6::renderer::ObservedPassDesc& pass) {
+  const uint64_t viewport_area =
+      uint64_t(pass.viewport_width) * uint64_t(pass.viewport_height);
+  uint32_t score = 0;
+  score += pass.selected_for_present ? 160u : 0u;
+  score += pass.matches_frame_end_viewport ? 120u : 0u;
+  score += pass.resolve_count * 80u;
+  score += pass.draw_count * 4u;
+  score += pass.clear_count * 6u;
+  score += pass.max_texture_count * 3u;
+  score += pass.max_stream_count * 2u;
+  score += pass.max_sampler_count * 2u;
+  score += static_cast<uint32_t>(std::min<uint64_t>(viewport_area / 32768u, 120u));
+  switch (pass.kind) {
+    case ac6::renderer::ObservedPassKind::kScene:
+      score += 40u;
+      break;
+    case ac6::renderer::ObservedPassKind::kPostProcess:
+      score += 50u;
+      break;
+    case ac6::renderer::ObservedPassKind::kUiComposite:
+      score += 20u;
+      break;
+    case ac6::renderer::ObservedPassKind::kUnknown:
+    default:
+      break;
+  }
+  return score;
+}
+
+void RefreshPassDiagnostics(const std::vector<ac6::renderer::ObservedPassDesc>& passes) {
+  g_runtime_status.pass_diagnostics_count = 0;
+  g_runtime_status.pass_diagnostics = {};
+  if (passes.empty()) {
+    return;
+  }
+
+  struct RankedPass {
+    uint32_t pass_index = 0;
+    uint32_t score = 0;
+  };
+
+  std::vector<RankedPass> ranked;
+  ranked.reserve(passes.size());
+  for (uint32_t i = 0; i < passes.size(); ++i) {
+    const auto& pass = passes[i];
+    ranked.push_back({i, ScoreObservedPassForDiagnostics(pass)});
+  }
+
+  std::sort(ranked.begin(), ranked.end(), [&](const RankedPass& left, const RankedPass& right) {
+    if (left.score != right.score) {
+      return left.score > right.score;
+    }
+    return left.pass_index < right.pass_index;
+  });
+
+  const uint32_t count = std::min<uint32_t>(static_cast<uint32_t>(ranked.size()),
+                                            static_cast<uint32_t>(g_runtime_status.pass_diagnostics.size()));
+  g_runtime_status.pass_diagnostics_count = count;
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto& ranked_pass = ranked[i];
+    const auto& pass = passes[ranked_pass.pass_index];
+    g_runtime_status.pass_diagnostics[i] = {
+        .valid = true,
+        .pass_index = ranked_pass.pass_index,
+        .kind = pass.kind,
+        .score = ranked_pass.score,
+        .render_target_0 = pass.render_target_0,
+        .depth_stencil = pass.depth_stencil,
+        .viewport_x = pass.viewport_x,
+        .viewport_y = pass.viewport_y,
+        .viewport_width = pass.viewport_width,
+        .viewport_height = pass.viewport_height,
+        .draw_count = pass.draw_count,
+        .clear_count = pass.clear_count,
+        .resolve_count = pass.resolve_count,
+        .max_texture_count = pass.max_texture_count,
+        .max_stream_count = pass.max_stream_count,
+        .max_sampler_count = pass.max_sampler_count,
+        .max_fetch_constant_count = pass.max_fetch_constant_count,
+        .max_shader_gpr_alloc = pass.max_shader_gpr_alloc,
+        .pass_signature = pass.pass_signature,
+        .first_texture_fetch_layout_signature =
+            pass.first_texture_fetch_layout_signature,
+        .last_texture_fetch_layout_signature =
+            pass.last_texture_fetch_layout_signature,
+        .first_resource_binding_signature =
+            pass.first_resource_binding_signature,
+        .last_resource_binding_signature =
+            pass.last_resource_binding_signature,
+        .first_textures = {.count = pass.first_textures.count,
+                           .slots = pass.first_textures.slots,
+                           .values = pass.first_textures.values},
+        .last_textures = {.count = pass.last_textures.count,
+                          .slots = pass.last_textures.slots,
+                          .values = pass.last_textures.values},
+        .first_fetch_constants = {.count = pass.first_fetch_constants.count,
+                                  .slots = pass.first_fetch_constants.slots,
+                                  .values = pass.first_fetch_constants.values},
+        .last_fetch_constants = {.count = pass.last_fetch_constants.count,
+                                 .slots = pass.last_fetch_constants.slots,
+                                 .values = pass.last_fetch_constants.values},
+        .selected_for_present = pass.selected_for_present,
+        .matches_frame_end_viewport = pass.matches_frame_end_viewport,
+    };
+  }
+}
+
+void RefreshResolveDiagnostics(const ac6::d3d::FrameCaptureSnapshot& frame_capture) {
+  g_runtime_status.resolve_diagnostics_count = 0;
+  g_runtime_status.resolve_diagnostics = {};
+  if (frame_capture.resolves.empty()) {
+    return;
+  }
+
+  const uint32_t total_resolves = static_cast<uint32_t>(frame_capture.resolves.size());
+  const uint32_t count =
+      std::min<uint32_t>(total_resolves,
+                         static_cast<uint32_t>(g_runtime_status.resolve_diagnostics.size()));
+  const uint32_t start_index = total_resolves - count;
+  g_runtime_status.resolve_diagnostics_count = count;
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto& resolve = frame_capture.resolves[start_index + i];
+    g_runtime_status.resolve_diagnostics[i] = {
+        .valid = true,
+        .sequence = resolve.sequence,
+        .render_target_0 = resolve.shadow_state.render_targets[0],
+        .depth_stencil = resolve.shadow_state.depth_stencil,
+        .viewport_width = resolve.shadow_state.viewport.width,
+        .viewport_height = resolve.shadow_state.viewport.height,
+        .args = resolve.args,
+        .depth_or_scale = resolve.depth_or_scale,
+    };
+  }
 }
 
 void ShutdownReplayRenderer() {
@@ -213,6 +371,7 @@ std::string_view ToString(const GraphicsRuntimeMode mode) {
 
 void OnFrameBoundary(rex::memory::Memory* memory) {
   SyncRuntimeFlags();
+  g_captured_memory.store(memory, std::memory_order_release);
 
   if (!g_runtime_status.enabled || g_runtime_status.mode == GraphicsRuntimeMode::kDisabled) {
     ShutdownReplayRenderer();
@@ -238,6 +397,11 @@ void OnFrameBoundary(rex::memory::Memory* memory) {
   ++g_runtime_status.analysis_frames_observed;
   g_runtime_status.capture_summary = capture_summary;
   g_runtime_status.latest_capture_frame_index = capture_summary.frame_index;
+  g_runtime_status.frontend_summary = g_capture_frontend.BuildFromCapture(frame_capture);
+  RefreshPassDiagnostics(g_capture_frontend.passes());
+  RefreshResolveDiagnostics(frame_capture);
+  g_runtime_status.frame_plan = g_capture_frame_planner.Build(
+      g_runtime_status.frontend_summary, g_capture_frontend.passes());
   if (capture_summary.draw_count || capture_summary.clear_count ||
       capture_summary.resolve_count) {
     g_runtime_status.last_meaningful_capture_frame_index = capture_summary.frame_index;
@@ -318,6 +482,7 @@ void OnFrameBoundary(rex::memory::Memory* memory) {
 }
 
 void Shutdown() {
+  g_captured_memory.store(nullptr, std::memory_order_release);
   ShutdownReplayRenderer();
 }
 
@@ -335,6 +500,10 @@ ID3D12Resource* GetNativeOutputTexture() {
     return nullptr;
   }
   return g_d3d12_backend ? g_d3d12_backend->GetOutputTexture() : nullptr;
+}
+
+rex::memory::Memory* GetCapturedMemory() {
+  return g_captured_memory.load(std::memory_order_acquire);
 }
 
 }  // namespace ac6::graphics

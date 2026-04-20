@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -47,7 +48,14 @@ struct ObservedCommandDesc {
 };
 
 struct ObservedPassDesc {
+  struct BoundResourceSample {
+    uint32_t count = 0;
+    std::array<uint32_t, 4> slots{};
+    std::array<uint32_t, 4> values{};
+  };
+
   ObservedPassKind kind = ObservedPassKind::kUnknown;
+  uint64_t pass_signature = 0;
   uint32_t start_sequence = 0;
   uint32_t end_sequence = 0;
   uint32_t draw_count = 0;
@@ -61,12 +69,23 @@ struct ObservedPassDesc {
   uint32_t max_sampler_count = 0;
   uint32_t max_fetch_constant_count = 0;
   uint32_t max_draw_call_count = 0;
+  uint32_t max_shader_gpr_alloc = 0;
   uint32_t render_target_0 = 0;
   uint32_t depth_stencil = 0;
   uint32_t viewport_x = 0;
   uint32_t viewport_y = 0;
   uint32_t viewport_width = 0;
   uint32_t viewport_height = 0;
+  uint64_t first_vertex_fetch_layout_signature = 0;
+  uint64_t last_vertex_fetch_layout_signature = 0;
+  uint64_t first_texture_fetch_layout_signature = 0;
+  uint64_t last_texture_fetch_layout_signature = 0;
+  uint64_t first_resource_binding_signature = 0;
+  uint64_t last_resource_binding_signature = 0;
+  BoundResourceSample first_textures{};
+  BoundResourceSample last_textures{};
+  BoundResourceSample first_fetch_constants{};
+  BoundResourceSample last_fetch_constants{};
   bool selected_for_present = false;
   bool matches_frame_end_viewport = false;
   std::vector<ObservedCommandDesc> commands;

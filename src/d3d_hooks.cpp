@@ -315,12 +315,22 @@ void CaptureClear(uint8_t* base, uint32_t device, uint32_t rect_count, uint32_t 
     g_live_clears.push_back(std::move(record));
 }
 
-void CaptureResolve(uint32_t device) {
+void CaptureResolve(uint32_t device, const PPCContext& ctx) {
     if (!REXCVAR_GET(ac6_render_capture)) {
         return;
     }
 
     ac6::d3d::ResolveRecord record;
+    record.args = {
+        ctx.r4.u32,
+        ctx.r5.u32,
+        ctx.r6.u32,
+        ctx.r7.u32,
+        ctx.r8.u32,
+        ctx.r9.u32,
+        ctx.r10.u32,
+    };
+    record.depth_or_scale = static_cast<float>(ctx.f1.f64);
     record.shadow_state = SnapshotShadowState(device);
 
     std::unique_lock<std::shared_mutex> lock(g_capture_mutex);
@@ -530,7 +540,7 @@ PPC_FUNC_IMPL(rex_sub_821E2BB8) {
 
     RememberDevice(ctx.r3.u32);
     g_live_stats.resolve_calls.fetch_add(1, std::memory_order_relaxed);
-    CaptureResolve(ctx.r3.u32);
+    CaptureResolve(ctx.r3.u32, ctx);
 
     if (REXCVAR_GET(ac6_d3d_trace)) {
         REXLOG_CAT_TRACE(kLogGPU, "Resolve");

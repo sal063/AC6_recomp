@@ -94,7 +94,7 @@ echo Found ISO: !ISO_FILE!
 set EXTRACT_XISO_EXE=extract-xiso.exe
 if not exist "!EXTRACT_XISO_EXE!" (
     echo extract-xiso not found. Downloading...
-    powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/XboxDev/extract-xiso/releases/download/build-202310260309/extract-xiso-win32-x64.zip' -OutFile 'extract-xiso.zip'; Expand-Archive -Path 'extract-xiso.zip' -DestinationPath 'extract-xiso-temp' -Force; Move-Item -Path 'extract-xiso-temp\extract-xiso.exe' -Destination '.' -Force; Remove-Item 'extract-xiso.zip'; Remove-Item 'extract-xiso-temp' -Recurse -Force"
+    powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/XboxDev/extract-xiso/releases/download/build-202505152050/extract-xiso-Win32_Release.zip' -OutFile 'extract-xiso.zip'; Expand-Archive -Path 'extract-xiso.zip' -DestinationPath 'extract-xiso-temp' -Force; Move-Item -Path 'extract-xiso-temp\artifacts\extract-xiso.exe' -Destination '.' -Force; Remove-Item 'extract-xiso.zip'; Remove-Item 'extract-xiso-temp' -Recurse -Force"
     if not exist "!EXTRACT_XISO_EXE!" (
         echo [ERROR] Failed to download or extract extract-xiso.
         echo Please download it manually from https://github.com/XboxDev/extract-xiso/releases and place extract-xiso.exe in this folder.

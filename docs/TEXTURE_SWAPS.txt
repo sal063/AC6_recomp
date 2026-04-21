@@ -1,0 +1,137 @@
+Texture Swaps
+
+The texture swap pipeline lives in the authoritative RexGlue/Xenia D3D12
+texture cache. It is dump-and-replace based, so you do not need to hand-author
+per-texture IDs before you can start modding.
+
+Workflow
+
+1. Launch the game and let the texture cache see the textures you care about.
+2. Dumps appear under:
+   %USERPROFILE%\Documents\ac6recomp\texture_dumps\
+   or the directory set by the user_data_root runtime CVAR.
+3. Each dumped texture produces:
+   <stable_key>.dds
+   <stable_key>.json
+4. Edit the dumped DDS without changing its format, dimensions, array size, or
+   mip count.
+5. Place the replacement DDS at:
+   override/textures/<stable_key>.dds
+   or
+   mods/<mod_name>/textures/<stable_key>.dds
+6. Restart or cause the texture to reload.
+
+override/textures wins over mod folders. Within mods, lexicographically later
+folder names win.
+
+Stable Keys
+
+Dump filenames are generated from the texture cache key, not guessed game
+names. The filename includes:
+  - a hash of the full cache key
+  - base and mip pages
+  - dimension
+  - size
+  - mip count
+  - guest format
+  - endian/tiled/packed/signed/scaled flags
+
+That makes the key stable enough for round-tripping replacements while still
+being readable.
+
+Metadata Sidecars
+
+Each JSON sidecar records:
+  - guest texture key fields
+  - chosen host DXGI format
+  - AC6 frame index
+  - latest AC6 backend signature ID
+  - active VS/PS hashes
+  - signature tags from the AC6 backend classifier
+
+This is meant for filtering and later tooling, not for the core replacement
+path.
+
+Current Scope
+
+First pass limitations:
+  - replacement files must be DDS files
+  - DX10 DDS is supported
+  - legacy DXT1/DXT3/DXT5 DDS is supported for plain 2D textures
+  - replacement format, dimensions, depth/array size, and mip count must match
+    exactly
+  - cube textures are skipped
+  - unsupported DXGI formats fall back to the original guest texture
+
+The fallback path is always the original guest texture load. A bad or missing
+replacement will not block rendering.
+
+Xenos Texture Formats
+
+Values below come from rex::graphics::xenos::TextureFormat in
+thirdparty/rexglue-sdk/include/rex/graphics/xenos.h.
+
+0  k_1_REVERSE
+1  k_1
+2  k_8
+3  k_1_5_5_5
+4  k_5_6_5
+5  k_6_5_5
+6  k_8_8_8_8
+7  k_2_10_10_10
+8  k_8_A
+9  k_8_B
+10 k_8_8
+11 k_Cr_Y1_Cb_Y0_REP
+12 k_Y1_Cr_Y0_Cb_REP
+13 k_16_16_EDRAM
+14 k_8_8_8_8_A
+15 k_4_4_4_4
+16 k_10_11_11
+17 k_11_11_10
+18 k_DXT1
+19 k_DXT2_3
+20 k_DXT4_5
+21 k_16_16_16_16_EDRAM
+22 k_24_8
+23 k_24_8_FLOAT
+24 k_16
+25 k_16_16
+26 k_16_16_16_16
+27 k_16_EXPAND
+28 k_16_16_EXPAND
+29 k_16_16_16_16_EXPAND
+30 k_16_FLOAT
+31 k_16_16_FLOAT
+32 k_16_16_16_16_FLOAT
+33 k_32
+34 k_32_32
+35 k_32_32_32_32
+36 k_32_FLOAT
+37 k_32_32_FLOAT
+38 k_32_32_32_32_FLOAT
+39 k_32_AS_8
+40 k_32_AS_8_8
+41 k_16_MPEG
+42 k_16_16_MPEG
+43 k_8_INTERLACED
+44 k_32_AS_8_INTERLACED
+45 k_32_AS_8_8_INTERLACED
+46 k_16_INTERLACED
+47 k_16_MPEG_INTERLACED
+48 k_16_16_MPEG_INTERLACED
+49 k_DXN
+50 k_8_8_8_8_AS_16_16_16_16
+51 k_DXT1_AS_16_16_16_16
+52 k_DXT2_3_AS_16_16_16_16
+53 k_DXT4_5_AS_16_16_16_16
+54 k_2_10_10_10_AS_16_16_16_16
+55 k_10_11_11_AS_16_16_16_16
+56 k_11_11_10_AS_16_16_16_16
+57 k_32_32_32_FLOAT
+58 k_DXT3A
+59 k_DXT5A
+60 k_CTX1
+61 k_DXT3A_AS_1_1_1_1
+62 k_8_8_8_8_GAMMA_EDRAM
+63 k_2_10_10_10_FLOAT_EDRAM

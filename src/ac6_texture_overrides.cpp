@@ -31,6 +31,9 @@ namespace {
 
 constexpr uint32_t kDdsMagic = 0x20534444u;
 constexpr uint32_t kDdsFourCcDx10 = 0x30315844u;
+constexpr uint32_t kDdsFourCcDxt1 = 0x31545844u;
+constexpr uint32_t kDdsFourCcDxt3 = 0x33545844u;
+constexpr uint32_t kDdsFourCcDxt5 = 0x35545844u;
 constexpr uint32_t kDdsHeaderFlagsTexture = 0x00001007u;
 constexpr uint32_t kDdsHeaderFlagsPitch = 0x00000008u;
 constexpr uint32_t kDdsHeaderFlagsLinearSize = 0x00080000u;
@@ -40,6 +43,7 @@ constexpr uint32_t kDdsCapsTexture = 0x00001000u;
 constexpr uint32_t kDdsCapsComplex = 0x00000008u;
 constexpr uint32_t kDdsCapsMipmap = 0x00400000u;
 constexpr uint32_t kDdsCaps2Volume = 0x00200000u;
+constexpr uint32_t kDdsCaps2Cubemap = 0x00000200u;
 constexpr uint32_t kDdsPixelFormatFlagsFourCc = 0x00000004u;
 constexpr uint32_t kDdsResourceDimensionTexture1D = 2u;
 constexpr uint32_t kDdsResourceDimensionTexture2D = 3u;
@@ -300,6 +304,22 @@ bool MapDdsDimension(uint32_t dds_dimension, D3D12_RESOURCE_DIMENSION& out) {
   }
 }
 
+bool MapLegacyDdsFourCc(uint32_t four_cc, DXGI_FORMAT& out) {
+  switch (four_cc) {
+    case kDdsFourCcDxt1:
+      out = DXGI_FORMAT_BC1_UNORM;
+      return true;
+    case kDdsFourCcDxt3:
+      out = DXGI_FORMAT_BC2_UNORM;
+      return true;
+    case kDdsFourCcDxt5:
+      out = DXGI_FORMAT_BC3_UNORM;
+      return true;
+    default:
+      return false;
+  }
+}
+
 uint32_t ToDdsDimension(D3D12_RESOURCE_DIMENSION dimension) {
   switch (dimension) {
     case D3D12_RESOURCE_DIMENSION_TEXTURE1D:
@@ -437,50 +457,91 @@ bool LoadDdsFromFile(const std::filesystem::path& path, DdsImageData& out, std::
   file.seekg(0, std::ios::end);
   const std::streamoff file_size = file.tellg();
   file.seekg(0, std::ios::beg);
-  if (file_size < std::streamoff(sizeof(uint32_t) + sizeof(DdsHeader) + sizeof(DdsHeaderDx10))) {
+  if (file_size < std::streamoff(sizeof(uint32_t) + sizeof(DdsHeader))) {
     if (error_out) {
-      *error_out = "file is too small to be a DX10 DDS";
+      *error_out = "file is too small to be a DDS";
     }
     return false;
   }
 
   uint32_t magic = 0;
   DdsHeader header = {};
-  DdsHeaderDx10 header_dx10 = {};
   file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
   file.read(reinterpret_cast<char*>(&header), sizeof(header));
-  file.read(reinterpret_cast<char*>(&header_dx10), sizeof(header_dx10));
   if (!file || magic != kDdsMagic || header.size != sizeof(DdsHeader) ||
-      header.pixel_format.size != sizeof(DdsPixelFormat) ||
-      header.pixel_format.four_cc != kDdsFourCcDx10) {
+      header.pixel_format.size != sizeof(DdsPixelFormat)) {
     if (error_out) {
-      *error_out = "only DDS files with a DX10 header are supported";
-    }
-    return false;
-  }
-  if ((header_dx10.misc_flag & kDdsResourceMiscTextureCube) != 0) {
-    if (error_out) {
-      *error_out = "cube DDS files are not supported by the first-pass texture swap loader";
+      *error_out = "invalid DDS header";
     }
     return false;
   }
 
+  DXGI_FORMAT dxgi_format = DXGI_FORMAT_UNKNOWN;
   D3D12_RESOURCE_DIMENSION dimension = D3D12_RESOURCE_DIMENSION_UNKNOWN;
-  if (!MapDdsDimension(header_dx10.resource_dimension, dimension)) {
+  uint32_t depth_or_array_size = 1;
+  size_t payload_offset = sizeof(uint32_t) + sizeof(DdsHeader);
+
+  if (header.pixel_format.flags & kDdsPixelFormatFlagsFourCc) {
+    if (header.pixel_format.four_cc == kDdsFourCcDx10) {
+      if (file_size < std::streamoff(payload_offset + sizeof(DdsHeaderDx10))) {
+        if (error_out) {
+          *error_out = "file is too small to contain a DX10 DDS header";
+        }
+        return false;
+      }
+      DdsHeaderDx10 header_dx10 = {};
+      file.read(reinterpret_cast<char*>(&header_dx10), sizeof(header_dx10));
+      if (!file) {
+        if (error_out) {
+          *error_out = "failed to read DX10 DDS header";
+        }
+        return false;
+      }
+      payload_offset += sizeof(DdsHeaderDx10);
+      if ((header_dx10.misc_flag & kDdsResourceMiscTextureCube) != 0) {
+        if (error_out) {
+          *error_out = "cube DDS files are not supported by the first-pass texture swap loader";
+        }
+        return false;
+      }
+      if (!MapDdsDimension(header_dx10.resource_dimension, dimension)) {
+        if (error_out) {
+          *error_out = "unsupported DDS resource dimension";
+        }
+        return false;
+      }
+      dxgi_format = DXGI_FORMAT(header_dx10.dxgi_format);
+      depth_or_array_size =
+          dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? std::max(header.depth, 1u)
+                                                          : std::max(header_dx10.array_size, 1u);
+    } else {
+      if (!MapLegacyDdsFourCc(header.pixel_format.four_cc, dxgi_format)) {
+        if (error_out) {
+          *error_out = "unsupported legacy DDS compression format";
+        }
+        return false;
+      }
+      if (header.caps2 & (kDdsCaps2Cubemap | kDdsCaps2Volume)) {
+        if (error_out) {
+          *error_out = "legacy DDS support is limited to plain 2D textures";
+        }
+        return false;
+      }
+      dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+      depth_or_array_size = 1;
+    }
+  } else {
     if (error_out) {
-      *error_out = "unsupported DDS resource dimension";
+      *error_out = "only FourCC DDS files are supported";
     }
     return false;
   }
 
   const uint32_t mip_count = std::max(header.mip_map_count, 1u);
-  const uint32_t depth_or_array_size =
-      dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? std::max(header.depth, 1u)
-                                                      : std::max(header_dx10.array_size, 1u);
   const uint32_t width = std::max(header.width, 1u);
   const uint32_t height = std::max(header.height, 1u);
 
-  if (!IsSupportedTextureSwapFormat(DXGI_FORMAT(header_dx10.dxgi_format))) {
+  if (!IsSupportedTextureSwapFormat(dxgi_format)) {
     if (error_out) {
       *error_out = "unsupported DXGI format in DDS file";
     }
@@ -488,7 +549,7 @@ bool LoadDdsFromFile(const std::filesystem::path& path, DdsImageData& out, std::
   }
 
   DdsImageData image;
-  image.format = DXGI_FORMAT(header_dx10.dxgi_format);
+  image.format = dxgi_format;
   image.dimension = dimension;
   image.width = width;
   image.height = height;
@@ -497,7 +558,7 @@ bool LoadDdsFromFile(const std::filesystem::path& path, DdsImageData& out, std::
   image.is_cube = false;
   image.subresources.reserve(ComputeSubresourceCount(dimension, depth_or_array_size, mip_count));
 
-  std::vector<uint8_t> payload(size_t(file_size) - (sizeof(uint32_t) + sizeof(DdsHeader) + sizeof(DdsHeaderDx10)));
+  std::vector<uint8_t> payload(size_t(file_size) - payload_offset);
   file.read(reinterpret_cast<char*>(payload.data()), std::streamsize(payload.size()));
   if (!file && !payload.empty()) {
     if (error_out) {
@@ -505,8 +566,7 @@ bool LoadDdsFromFile(const std::filesystem::path& path, DdsImageData& out, std::
     }
     return false;
   }
-
-  size_t payload_offset = 0;
+  size_t payload_cursor = 0;
   const uint32_t subresource_count = ComputeSubresourceCount(dimension, depth_or_array_size, mip_count);
   for (uint32_t subresource_index = 0; subresource_index < subresource_count; ++subresource_index) {
     const uint32_t mip_index =
@@ -527,7 +587,7 @@ bool LoadDdsFromFile(const std::filesystem::path& path, DdsImageData& out, std::
       return false;
     }
     const size_t subresource_size = size_t(tight_layout.slice_pitch) * subresource.depth;
-    if (payload_offset + subresource_size > payload.size()) {
+    if (payload_cursor + subresource_size > payload.size()) {
       if (error_out) {
         *error_out = "DDS payload is truncated";
       }
@@ -536,8 +596,8 @@ bool LoadDdsFromFile(const std::filesystem::path& path, DdsImageData& out, std::
     subresource.row_pitch = tight_layout.row_pitch;
     subresource.slice_pitch = tight_layout.slice_pitch;
     subresource.data.resize(subresource_size);
-    std::copy_n(payload.data() + payload_offset, subresource_size, subresource.data.data());
-    payload_offset += subresource_size;
+    std::copy_n(payload.data() + payload_cursor, subresource_size, subresource.data.data());
+    payload_cursor += subresource_size;
     image.subresources.push_back(std::move(subresource));
   }
 

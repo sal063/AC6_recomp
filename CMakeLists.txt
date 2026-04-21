@@ -20,6 +20,7 @@ set(AC6RECOMP_SOURCES
     src/main.cpp
     src/d3d_hooks.cpp
     src/render_hooks.cpp
+    src/ac6_texture_overrides.cpp
     src/ac6_native_graphics.cpp
     src/ac6_native_graphics_overlay.cpp
     src/ac6_backend_fixes/ac6_backend_capture_bridge.cpp

@@ -14,7 +14,9 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -404,6 +406,44 @@ class D3D12TextureCache final : public TextureCache {
                                          bool is_signed, uint32_t host_swizzle);
   void ReleaseTextureDescriptor(uint32_t descriptor_index);
   D3D12_CPU_DESCRIPTOR_HANDLE GetTextureDescriptorCPUHandle(uint32_t descriptor_index) const;
+  void ProcessCompletedTextureTransfers();
+  bool ScheduleTextureDump(D3D12Texture& texture, DXGI_FORMAT dump_format);
+  bool ApplyTextureReplacement(D3D12Texture& texture, DXGI_FORMAT replacement_format);
+
+  struct PendingTextureDump {
+    uint64_t submission_index = 0;
+    uint64_t total_size = 0;
+    uint64_t texture_key_hash = 0;
+    uint64_t frame_index = 0;
+    uint64_t signature_stable_id = 0;
+    uint64_t active_vertex_shader_hash = 0;
+    uint64_t active_pixel_shader_hash = 0;
+    uint32_t base_page = 0;
+    uint32_t mip_page = 0;
+    uint32_t guest_dimension = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth_or_array_size = 1;
+    uint32_t mip_count = 1;
+    uint32_t guest_format = 0;
+    uint32_t endianness = 0;
+    DXGI_FORMAT dxgi_format = DXGI_FORMAT_UNKNOWN;
+    D3D12_RESOURCE_DIMENSION resource_dimension = D3D12_RESOURCE_DIMENSION_UNKNOWN;
+    bool tiled = false;
+    bool packed_mips = false;
+    bool signed_separate = false;
+    bool scaled_resolve = false;
+    std::string stable_key;
+    std::string signature_tags;
+    Microsoft::WRL::ComPtr<ID3D12Resource> readback_buffer;
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints;
+    std::vector<uint32_t> row_counts;
+  };
+
+  struct PendingUploadResource {
+    uint64_t submission_index = 0;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+  };
 
   size_t GetScaledResolveBufferCount() const {
     assert_true(IsDrawResolutionScaled());
@@ -490,6 +530,10 @@ class D3D12TextureCache final : public TextureCache {
     kUnsupportedSnormBit = kUnsupportedUnormBit << 1,
   };
   uint8_t unsupported_format_features_used_[64];
+  std::unordered_set<std::string> dumped_texture_keys_;
+  std::unordered_set<std::string> replacement_warning_keys_;
+  std::vector<PendingTextureDump> pending_texture_dumps_;
+  std::vector<PendingUploadResource> pending_upload_resources_;
 
   // The tiled buffer for resolved data with resolution scaling.
   // Because on Direct3D 12 (at least on Windows 10 2004) typed SRV or UAV

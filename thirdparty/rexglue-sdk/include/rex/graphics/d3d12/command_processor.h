@@ -226,9 +226,11 @@ class D3D12CommandProcessor : public CommandProcessor {
                  IndexBufferInfo* index_buffer_info, bool major_mode_explicit) override;
   bool IssueCopy() override;
 
-  void InitializeTrace() override;
+ void InitializeTrace() override;
 
  private:
+  friend class D3D12TextureCache;
+
   static constexpr uint32_t kQueueFrames = 3;
 
   enum RootParameter : UINT {

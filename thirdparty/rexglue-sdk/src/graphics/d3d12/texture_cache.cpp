@@ -30,6 +30,10 @@
 #include <rex/math.h>
 #include <rex/ui/d3d12/d3d12_upload_buffer_pool.h>
 #include <rex/ui/d3d12/d3d12_util.h>
+#include <rex/hash.h>
+
+#include "../../../../../src/ac6_backend_fixes/ac6_backend_hooks.h"
+#include "../../../../../src/ac6_texture_overrides.h"
 
 namespace rex::graphics::d3d12 {
 
@@ -807,6 +811,7 @@ void D3D12TextureCache::BeginSubmission(uint64_t new_submission_index) {
 
 void D3D12TextureCache::BeginFrame() {
   TextureCache::BeginFrame();
+  ProcessCompletedTextureTransfers();
 
   std::memset(unsupported_format_features_used_, 0, sizeof(unsupported_format_features_used_));
 }
@@ -2212,6 +2217,383 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, 
 
   command_processor_.ReleaseScratchGPUBuffer(copy_buffer_copy_source, copy_buffer_copy_source_state);
 
+  DXGI_FORMAT swap_format = host_format_is_signed
+                                ? host_formats_[uint32_t(texture_key.format)].dxgi_format_signed
+                                : GetDXGIUnormFormat(texture_key);
+  if (swap_format != DXGI_FORMAT_UNKNOWN && texture_key.dimension != xenos::DataDimension::kCube) {
+    ScheduleTextureDump(d3d12_texture, swap_format);
+    ApplyTextureReplacement(d3d12_texture, swap_format);
+  }
+
+  return true;
+}
+
+void D3D12TextureCache::ProcessCompletedTextureTransfers() {
+  const uint64_t completed_submission = command_processor_.GetCompletedSubmission();
+
+  for (auto it = pending_upload_resources_.begin(); it != pending_upload_resources_.end();) {
+    if (it->submission_index > completed_submission) {
+      ++it;
+      continue;
+    }
+    it = pending_upload_resources_.erase(it);
+  }
+
+  for (auto it = pending_texture_dumps_.begin(); it != pending_texture_dumps_.end();) {
+    if (it->submission_index > completed_submission) {
+      ++it;
+      continue;
+    }
+
+    D3D12_RANGE read_range;
+    read_range.Begin = 0;
+    read_range.End = SIZE_T(it->total_size);
+    void* mapped = nullptr;
+    if (FAILED(it->readback_buffer->Map(0, &read_range, &mapped))) {
+      REXGPU_WARN("Texture swap dump {}: failed to map readback buffer", it->stable_key);
+      it = pending_texture_dumps_.erase(it);
+      continue;
+    }
+
+    ac6::textures::DdsImageData dds_image;
+    dds_image.format = it->dxgi_format;
+    dds_image.dimension = it->resource_dimension;
+    dds_image.width = it->width;
+    dds_image.height = it->height;
+    dds_image.depth_or_array_size = it->depth_or_array_size;
+    dds_image.mip_count = it->mip_count;
+    dds_image.is_cube = false;
+    dds_image.subresources.reserve(it->footprints.size());
+
+    bool build_failed = false;
+    for (size_t subresource_index = 0; subresource_index < it->footprints.size(); ++subresource_index) {
+      const uint32_t mip_index =
+          it->resource_dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
+              ? uint32_t(subresource_index)
+              : (uint32_t(subresource_index) % it->mip_count);
+      ac6::textures::DdsSubresource subresource;
+      subresource.width = std::max(it->width >> mip_index, 1u);
+      subresource.height = std::max(it->height >> mip_index, 1u);
+      subresource.depth = it->resource_dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
+                              ? std::max(it->depth_or_array_size >> mip_index, 1u)
+                              : 1u;
+
+      ac6::textures::TextureSubresourceLayout tight_layout = {};
+      if (!ac6::textures::GetTightTextureSubresourceLayout(
+              it->dxgi_format, subresource.width, subresource.height, tight_layout)) {
+        REXGPU_WARN("Texture swap dump {}: unsupported dump format {}",
+                    it->stable_key, uint32_t(it->dxgi_format));
+        build_failed = true;
+        break;
+      }
+
+      subresource.row_pitch = tight_layout.row_pitch;
+      subresource.slice_pitch = tight_layout.slice_pitch;
+      subresource.data.resize(size_t(subresource.slice_pitch) * subresource.depth);
+
+      const uint8_t* source_base =
+          reinterpret_cast<const uint8_t*>(mapped) + it->footprints[subresource_index].Offset;
+      const uint32_t source_row_pitch = it->footprints[subresource_index].Footprint.RowPitch;
+      const uint32_t source_row_count = it->row_counts[subresource_index];
+      for (uint32_t z = 0; z < subresource.depth; ++z) {
+        const uint8_t* source_slice = source_base + size_t(z) * source_row_pitch * source_row_count;
+        uint8_t* dest_slice = subresource.data.data() + size_t(z) * subresource.slice_pitch;
+        for (uint32_t row = 0; row < tight_layout.row_count; ++row) {
+          std::memcpy(dest_slice + size_t(row) * subresource.row_pitch,
+                      source_slice + size_t(row) * source_row_pitch, subresource.row_pitch);
+        }
+      }
+
+      dds_image.subresources.push_back(std::move(subresource));
+    }
+
+    it->readback_buffer->Unmap(0, nullptr);
+    if (build_failed) {
+      it = pending_texture_dumps_.erase(it);
+      continue;
+    }
+
+    ac6::textures::TextureDumpMetadata metadata;
+    metadata.stable_key = it->stable_key;
+    metadata.texture_key_hash = it->texture_key_hash;
+    metadata.base_page = it->base_page;
+    metadata.mip_page = it->mip_page;
+    metadata.dimension = it->guest_dimension;
+    metadata.width = it->width;
+    metadata.height = it->height;
+    metadata.depth_or_array_size = it->depth_or_array_size;
+    metadata.mip_count = it->mip_count;
+    metadata.guest_format = it->guest_format;
+    metadata.endianness = it->endianness;
+    metadata.dxgi_format = uint32_t(it->dxgi_format);
+    metadata.tiled = it->tiled;
+    metadata.packed_mips = it->packed_mips;
+    metadata.signed_separate = it->signed_separate;
+    metadata.scaled_resolve = it->scaled_resolve;
+    metadata.frame_index = it->frame_index;
+    metadata.signature_stable_id = it->signature_stable_id;
+    metadata.active_vertex_shader_hash = it->active_vertex_shader_hash;
+    metadata.active_pixel_shader_hash = it->active_pixel_shader_hash;
+    metadata.signature_tags = it->signature_tags;
+
+    std::string error;
+    if (!ac6::textures::WriteDdsToFile(ac6::textures::GetTextureDumpDdsPath(it->stable_key),
+                                       dds_image, &error)) {
+      REXGPU_WARN("Texture swap dump {}: failed to write DDS ({})", it->stable_key, error);
+    } else if (!ac6::textures::WriteDumpMetadata(
+                   ac6::textures::GetTextureDumpMetadataPath(it->stable_key), metadata, &error)) {
+      REXGPU_WARN("Texture swap dump {}: failed to write metadata ({})", it->stable_key, error);
+    }
+
+    it = pending_texture_dumps_.erase(it);
+  }
+}
+
+bool D3D12TextureCache::ScheduleTextureDump(D3D12Texture& texture, DXGI_FORMAT dump_format) {
+  if (!ac6::textures::TextureDumpEnabled() || !ac6::textures::IsSupportedTextureSwapFormat(dump_format)) {
+    return false;
+  }
+
+  const TextureKey& key = texture.key();
+  const uint64_t texture_key_hash = XXH3_64bits(&key, sizeof(key));
+  const std::string stable_key = ac6::textures::BuildTextureStableKey(
+      texture_key_hash, key.base_page, key.mip_page, uint32_t(key.dimension), key.GetWidth(),
+      key.GetHeight(), key.GetDepthOrArraySize(), key.mip_max_level + 1, uint32_t(key.format),
+      uint32_t(key.endianness), key.tiled != 0, key.packed_mips != 0, key.signed_separate != 0,
+      key.scaled_resolve != 0);
+
+  if (dumped_texture_keys_.contains(stable_key) || ac6::textures::DumpExists(stable_key)) {
+    dumped_texture_keys_.insert(stable_key);
+    return false;
+  }
+
+  ID3D12Resource* texture_resource = texture.resource();
+  D3D12_RESOURCE_DESC resource_desc = texture_resource->GetDesc();
+  if (resource_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+      resource_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE3D) {
+    return false;
+  }
+
+  const uint32_t subresource_count =
+      resource_desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
+          ? resource_desc.MipLevels
+          : resource_desc.MipLevels * resource_desc.DepthOrArraySize;
+  std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(subresource_count);
+  std::vector<UINT> row_counts(subresource_count);
+  std::vector<UINT64> row_sizes(subresource_count);
+  UINT64 total_size = 0;
+  ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
+  device->GetCopyableFootprints(&resource_desc, 0, subresource_count, 0, footprints.data(),
+                                row_counts.data(), row_sizes.data(), &total_size);
+
+  ID3D12Resource* readback_resource = command_processor_.RequestReadbackBuffer(uint32_t(total_size));
+  if (!readback_resource) {
+    return false;
+  }
+
+  const D3D12_RESOURCE_STATES previous_state = texture.SetResourceState(D3D12_RESOURCE_STATE_COPY_SOURCE);
+  if (previous_state != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+    command_processor_.PushTransitionBarrier(texture_resource, previous_state,
+                                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+    command_processor_.SubmitBarriers();
+  }
+
+  DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
+  for (uint32_t subresource_index = 0; subresource_index < subresource_count; ++subresource_index) {
+    D3D12_TEXTURE_COPY_LOCATION source = {};
+    source.pResource = texture_resource;
+    source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    source.SubresourceIndex = subresource_index;
+
+    D3D12_TEXTURE_COPY_LOCATION dest = {};
+    dest.pResource = readback_resource;
+    dest.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dest.PlacedFootprint = footprints[subresource_index];
+
+    command_list.D3DCopyTextureRegion(&dest, 0, 0, 0, &source, nullptr);
+  }
+
+  const ac6::backend::BackendDiagnosticsSnapshot diagnostics = ac6::backend::GetDiagnosticsSnapshot();
+  PendingTextureDump pending_dump;
+  pending_dump.submission_index = command_processor_.GetCurrentSubmission();
+  pending_dump.total_size = total_size;
+  pending_dump.texture_key_hash = texture_key_hash;
+  pending_dump.base_page = key.base_page;
+  pending_dump.mip_page = key.mip_page;
+  pending_dump.guest_dimension = uint32_t(key.dimension);
+  pending_dump.width = key.GetWidth();
+  pending_dump.height = key.GetHeight();
+  pending_dump.depth_or_array_size = key.GetDepthOrArraySize();
+  pending_dump.mip_count = key.mip_max_level + 1;
+  pending_dump.guest_format = uint32_t(key.format);
+  pending_dump.endianness = uint32_t(key.endianness);
+  pending_dump.dxgi_format = dump_format;
+  pending_dump.resource_dimension = resource_desc.Dimension;
+  pending_dump.tiled = key.tiled != 0;
+  pending_dump.packed_mips = key.packed_mips != 0;
+  pending_dump.signed_separate = key.signed_separate != 0;
+  pending_dump.scaled_resolve = key.scaled_resolve != 0;
+  pending_dump.frame_index = diagnostics.frame_index;
+  pending_dump.signature_stable_id = diagnostics.latest_signature.stable_id;
+  pending_dump.active_vertex_shader_hash = diagnostics.active_vertex_shader_hash;
+  pending_dump.active_pixel_shader_hash = diagnostics.active_pixel_shader_hash;
+  pending_dump.stable_key = stable_key;
+  pending_dump.signature_tags = diagnostics.latest_signature_tags;
+  pending_dump.readback_buffer = readback_resource;
+  pending_dump.footprints = std::move(footprints);
+  pending_dump.row_counts.reserve(row_counts.size());
+  for (UINT row_count : row_counts) {
+    pending_dump.row_counts.push_back(uint32_t(row_count));
+  }
+  pending_texture_dumps_.push_back(std::move(pending_dump));
+  dumped_texture_keys_.insert(stable_key);
+  return true;
+}
+
+bool D3D12TextureCache::ApplyTextureReplacement(D3D12Texture& texture, DXGI_FORMAT replacement_format) {
+  if (!ac6::textures::TextureReplacementEnabled() ||
+      !ac6::textures::IsSupportedTextureSwapFormat(replacement_format)) {
+    return false;
+  }
+
+  const TextureKey& key = texture.key();
+  const uint64_t texture_key_hash = XXH3_64bits(&key, sizeof(key));
+  const std::string stable_key = ac6::textures::BuildTextureStableKey(
+      texture_key_hash, key.base_page, key.mip_page, uint32_t(key.dimension), key.GetWidth(),
+      key.GetHeight(), key.GetDepthOrArraySize(), key.mip_max_level + 1, uint32_t(key.format),
+      uint32_t(key.endianness), key.tiled != 0, key.packed_mips != 0, key.signed_separate != 0,
+      key.scaled_resolve != 0);
+
+  const std::optional<std::filesystem::path> replacement_path =
+      ac6::textures::ResolveReplacementDdsPath(stable_key);
+  if (!replacement_path) {
+    return false;
+  }
+
+  ac6::textures::DdsImageData replacement;
+  std::string error;
+  if (!ac6::textures::LoadDdsFromFile(*replacement_path, replacement, &error)) {
+    if (replacement_warning_keys_.insert(stable_key).second) {
+      REXGPU_WARN("Texture swap {}: failed to load replacement {} ({})", stable_key,
+                  replacement_path->string(), error);
+    }
+    return false;
+  }
+
+  ID3D12Resource* texture_resource = texture.resource();
+  const D3D12_RESOURCE_DESC resource_desc = texture_resource->GetDesc();
+  if (replacement.is_cube || replacement.format != replacement_format ||
+      replacement.dimension != resource_desc.Dimension || replacement.width != resource_desc.Width ||
+      replacement.height != resource_desc.Height ||
+      replacement.depth_or_array_size != resource_desc.DepthOrArraySize ||
+      replacement.mip_count != resource_desc.MipLevels) {
+    if (replacement_warning_keys_.insert(stable_key).second) {
+      REXGPU_WARN(
+          "Texture swap {}: replacement {} does not match expected format/layout (expected {} {}x{}x{} mips={})",
+          stable_key, replacement_path->string(), ac6::textures::DescribeDxgiFormat(replacement_format),
+          uint32_t(resource_desc.Width), resource_desc.Height, resource_desc.DepthOrArraySize,
+          resource_desc.MipLevels);
+    }
+    return false;
+  }
+
+  const uint32_t subresource_count =
+      resource_desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
+          ? resource_desc.MipLevels
+          : resource_desc.MipLevels * resource_desc.DepthOrArraySize;
+  if (replacement.subresources.size() != subresource_count) {
+    if (replacement_warning_keys_.insert(stable_key).second) {
+      REXGPU_WARN("Texture swap {}: replacement {} has {} subresources, expected {}", stable_key,
+                  replacement_path->string(), replacement.subresources.size(), subresource_count);
+    }
+    return false;
+  }
+
+  ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
+  std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(subresource_count);
+  std::vector<UINT> row_counts(subresource_count);
+  std::vector<UINT64> row_sizes(subresource_count);
+  UINT64 upload_size = 0;
+  device->GetCopyableFootprints(&resource_desc, 0, subresource_count, 0, footprints.data(),
+                                row_counts.data(), row_sizes.data(), &upload_size);
+
+  D3D12_RESOURCE_DESC upload_desc = {};
+  upload_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  upload_desc.Alignment = 0;
+  upload_desc.Width = upload_size;
+  upload_desc.Height = 1;
+  upload_desc.DepthOrArraySize = 1;
+  upload_desc.MipLevels = 1;
+  upload_desc.Format = DXGI_FORMAT_UNKNOWN;
+  upload_desc.SampleDesc.Count = 1;
+  upload_desc.SampleDesc.Quality = 0;
+  upload_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  upload_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+  Microsoft::WRL::ComPtr<ID3D12Resource> upload_buffer;
+  if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesUpload,
+                                             command_processor_.GetD3D12Provider().GetHeapFlagCreateNotZeroed(),
+                                             &upload_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             IID_PPV_ARGS(&upload_buffer)))) {
+    if (replacement_warning_keys_.insert(stable_key).second) {
+      REXGPU_WARN("Texture swap {}: failed to create upload buffer for {}", stable_key,
+                  replacement_path->string());
+    }
+    return false;
+  }
+
+  D3D12_RANGE no_read_range = {};
+  void* mapped_upload = nullptr;
+  if (FAILED(upload_buffer->Map(0, &no_read_range, &mapped_upload))) {
+    if (replacement_warning_keys_.insert(stable_key).second) {
+      REXGPU_WARN("Texture swap {}: failed to map upload buffer for {}", stable_key,
+                  replacement_path->string());
+    }
+    return false;
+  }
+
+  for (uint32_t subresource_index = 0; subresource_index < subresource_count; ++subresource_index) {
+    const ac6::textures::DdsSubresource& subresource = replacement.subresources[subresource_index];
+    const uint8_t* source_base = subresource.data.data();
+    uint8_t* dest_base = reinterpret_cast<uint8_t*>(mapped_upload) + footprints[subresource_index].Offset;
+    const uint32_t dest_row_pitch = footprints[subresource_index].Footprint.RowPitch;
+
+    for (uint32_t z = 0; z < subresource.depth; ++z) {
+      const uint8_t* source_slice = source_base + size_t(z) * subresource.slice_pitch;
+      uint8_t* dest_slice = dest_base + size_t(z) * dest_row_pitch * row_counts[subresource_index];
+      for (uint32_t row = 0; row < row_counts[subresource_index]; ++row) {
+        std::memcpy(dest_slice + size_t(row) * dest_row_pitch,
+                    source_slice + size_t(row) * subresource.row_pitch, subresource.row_pitch);
+      }
+    }
+  }
+  upload_buffer->Unmap(0, nullptr);
+
+  const D3D12_RESOURCE_STATES previous_state = texture.SetResourceState(D3D12_RESOURCE_STATE_COPY_DEST);
+  if (previous_state != D3D12_RESOURCE_STATE_COPY_DEST) {
+    command_processor_.PushTransitionBarrier(texture_resource, previous_state,
+                                             D3D12_RESOURCE_STATE_COPY_DEST);
+    command_processor_.SubmitBarriers();
+  }
+
+  DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
+  for (uint32_t subresource_index = 0; subresource_index < subresource_count; ++subresource_index) {
+    D3D12_TEXTURE_COPY_LOCATION source = {};
+    source.pResource = upload_buffer.Get();
+    source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    source.PlacedFootprint = footprints[subresource_index];
+
+    D3D12_TEXTURE_COPY_LOCATION dest = {};
+    dest.pResource = texture_resource;
+    dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dest.SubresourceIndex = subresource_index;
+
+    command_list.D3DCopyTextureRegion(&dest, 0, 0, 0, &source, nullptr);
+  }
+
+  pending_upload_resources_.push_back(
+      PendingUploadResource{command_processor_.GetCurrentSubmission(), upload_buffer});
+  replacement_warning_keys_.erase(stable_key);
   return true;
 }
 

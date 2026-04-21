@@ -815,14 +815,14 @@ DrawStatsSnapshot GetDrawStats() {
     return g_snapshot;
 }
 
-FrameCaptureSnapshot GetFrameCapture() {
-    std::shared_lock<std::shared_mutex> lock(g_capture_mutex);
-    return g_capture_snapshot;
-}
-
-FrameCaptureSummary GetFrameCaptureSummary() {
-    std::shared_lock<std::shared_mutex> lock(g_capture_mutex);
-    return g_capture_summary;
+FrameCaptureSnapshot TakeFrameCapture(FrameCaptureSummary* summary_out) {
+    std::unique_lock<std::shared_mutex> lock(g_capture_mutex);
+    if (summary_out) {
+        *summary_out = g_capture_summary;
+    }
+    FrameCaptureSnapshot snapshot = std::move(g_capture_snapshot);
+    g_capture_snapshot = {};
+    return snapshot;
 }
 
 ShadowState GetShadowState() {

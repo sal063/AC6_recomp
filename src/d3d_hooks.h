@@ -11,8 +11,7 @@ namespace ac6::d3d {
 void OnFrameBoundary();
 
 DrawStatsSnapshot GetDrawStats();
-FrameCaptureSnapshot GetFrameCapture();
-FrameCaptureSummary GetFrameCaptureSummary();
+FrameCaptureSnapshot TakeFrameCapture(FrameCaptureSummary* summary_out = nullptr);
 ShadowState GetShadowState();
 
 }  // namespace ac6::d3d

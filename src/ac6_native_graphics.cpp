@@ -23,9 +23,15 @@ REXCVAR_DEFINE_BOOL(ac6_native_graphics_enabled, true, "AC6/NativeGraphics",
                     "Enable AC6 graphics capture analysis, overlay reporting, and backend fixes");
 REXCVAR_DEFINE_BOOL(ac6_native_graphics_require_capture, true, "AC6/NativeGraphics",
                     "Keep render capture enabled while AC6 graphics analysis is active");
+REXCVAR_DEFINE_BOOL(ac6_force_safe_render_capture, true, "AC6/NativeGraphics",
+                    "Force AC6 hybrid backend fixes mode to keep per-draw render capture disabled until the capture path is stabilized");
 REXCVAR_DEFINE_STRING(ac6_graphics_mode, "hybrid_backend_fixes", "AC6/NativeGraphics",
                       "AC6 graphics runtime mode: disabled, analysis_only, hybrid_backend_fixes, legacy_replay_experimental")
     .allowed({"disabled", "analysis_only", "hybrid_backend_fixes", "legacy_replay_experimental"});
+REXCVAR_DEFINE_BOOL(ac6_force_safe_draw_resolution_scale, true, "AC6/NativeGraphics",
+                    "Force AC6 hybrid backend fixes mode to use 1x draw resolution scaling until the scaled path is fixed");
+REXCVAR_DEFINE_BOOL(ac6_force_safe_direct_host_resolve, true, "AC6/NativeGraphics",
+                    "Force AC6 hybrid backend fixes mode to keep direct_host_resolve disabled until the AC6 crash is fixed");
 REXCVAR_DEFINE_BOOL(ac6_experimental_replay_present, false, "AC6/NativeGraphics",
                     "Allow the legacy AC6 replay renderer to override the RexGlue swap source");
 REXCVAR_DEFINE_STRING(ac6_native_graphics_backend, "auto", "AC6/NativeGraphics",
@@ -46,6 +52,8 @@ ac6::renderer::FramePlanner g_capture_frame_planner;
 NativeGraphicsRuntimeStatus g_runtime_status{};
 ac6::renderer::D3D12Backend* g_d3d12_backend = nullptr;
 std::atomic<rex::memory::Memory*> g_captured_memory{nullptr};
+std::atomic_flag g_frame_boundary_active = ATOMIC_FLAG_INIT;
+std::atomic<uint32_t> g_frame_boundary_reentry_count{0};
 
 GraphicsRuntimeMode ParseGraphicsMode(std::string_view value) {
   if (value == "disabled") {
@@ -370,6 +378,22 @@ std::string_view ToString(const GraphicsRuntimeMode mode) {
 }
 
 void OnFrameBoundary(rex::memory::Memory* memory) {
+  if (g_frame_boundary_active.test_and_set(std::memory_order_acquire)) {
+    const uint32_t reentry_count =
+        g_frame_boundary_reentry_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (reentry_count == 1 || (reentry_count % 64) == 0) {
+      REXLOG_WARN("AC6 graphics: dropping re-entrant frame boundary callback (count={})",
+                  reentry_count);
+    }
+    return;
+  }
+
+  struct FrameBoundaryScope {
+    ~FrameBoundaryScope() {
+      g_frame_boundary_active.clear(std::memory_order_release);
+    }
+  } frame_boundary_scope;
+
   SyncRuntimeFlags();
   g_captured_memory.store(memory, std::memory_order_release);
 
@@ -390,8 +414,9 @@ void OnFrameBoundary(rex::memory::Memory* memory) {
 
   ac6::d3d::OnFrameBoundary();
 
-  const ac6::d3d::FrameCaptureSnapshot frame_capture = ac6::d3d::GetFrameCapture();
-  const ac6::d3d::FrameCaptureSummary capture_summary = ac6::d3d::GetFrameCaptureSummary();
+  ac6::d3d::FrameCaptureSummary capture_summary;
+  const ac6::d3d::FrameCaptureSnapshot frame_capture =
+      ac6::d3d::TakeFrameCapture(&capture_summary);
   const ac6::d3d::ShadowState shadow_state = ac6::d3d::GetShadowState();
 
   ++g_runtime_status.analysis_frames_observed;

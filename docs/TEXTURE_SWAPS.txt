@@ -10,6 +10,10 @@ Workflow
 2. Dumps appear under:
    %USERPROFILE%\Documents\ac6recomp\texture_dumps\
    or the directory set by the user_data_root runtime CVAR.
+   New dumps are also mirrored into:
+   %USERPROFILE%\Documents\ac6recomp\texture_dumps\sessions\<session_id>\
+   and the current session path is written to:
+   %USERPROFILE%\Documents\ac6recomp\texture_dumps\current_session.txt
 3. Each dumped texture produces:
    <stable_key>.dds
    <stable_key>.json
@@ -23,6 +27,40 @@ Workflow
 
 override/textures wins over mod folders. Within mods, lexicographically later
 folder names win.
+
+Shared Replacements
+
+Exact <stable_key>.dds matches still work, but texture override folders now
+also support an optional manifest:
+
+  override/textures/manifest.toml
+  mods/<mod_name>/textures/manifest.toml
+
+That lets one DDS serve multiple dumped textures, which is useful when the game
+has several menu-specific versions of the same logical art.
+
+Example:
+
+  [[swap]]
+  source = "shared/playstation_buttons.dds"
+  stable_keys = [
+    "tex_1111111111111111_bp00000000_mp00000000_2d_512x256x1_m1_fmt18_e0_t1_p0_s0_r0",
+    "tex_2222222222222222_bp00000000_mp00000000_2d_512x256x1_m1_fmt18_e0_t1_p0_s0_r0",
+  ]
+
+You can also use wildcards:
+
+  [[swap]]
+  source = "shared/common_ui_256.dds"
+  stable_key_globs = [
+    "tex_*_2d_256x256x1_m1_fmt6_*",
+  ]
+
+Manifest notes:
+  - source paths are relative to the texture override folder that owns the manifest
+  - exact <stable_key>.dds files still win over manifest rules in the same folder
+  - if multiple manifest rules match, the later rule wins
+  - later mod folders still override earlier mod folders
 
 Stable Keys
 
@@ -50,7 +88,8 @@ Each JSON sidecar records:
   - signature tags from the AC6 backend classifier
 
 This is meant for filtering and later tooling, not for the core replacement
-path.
+path, but the stable_key and layout fields are handy when authoring manifest
+rules.
 
 Current Scope
 
@@ -65,6 +104,13 @@ First pass limitations:
 
 The fallback path is always the original guest texture load. A bad or missing
 replacement will not block rendering.
+
+Practical Workflow Tip
+
+If you are targeting one menu or one HUD state, start the game fresh, open just
+that screen, then inspect current_session.txt or the matching sessions folder.
+That gives you a much smaller set of fresh dumps instead of the entire dump
+history.
 
 Xenos Texture Formats
 

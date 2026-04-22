@@ -40,6 +40,11 @@ cmake --build --preset win-amd64-relwithdebinfo
 
 The executable is placed at `out/build/win-amd64-relwithdebinfo/ac6recomp.exe`.
 
+## Modding Docs
+
+- [Texture Swap Modding Guide](docs/TEXTURE_SWAP_MODDING_GUIDE.txt)
+- [Texture Swap Reference](docs/TEXTURE_SWAPS.txt)
+
 ## Runtime Defaults
 
 The default AC6 graphics configuration after this pivot is:

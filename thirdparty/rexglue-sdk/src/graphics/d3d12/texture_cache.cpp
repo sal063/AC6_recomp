@@ -2343,6 +2343,19 @@ void D3D12TextureCache::ProcessCompletedTextureTransfers() {
     } else if (!ac6::textures::WriteDumpMetadata(
                    ac6::textures::GetTextureDumpMetadataPath(it->stable_key), metadata, &error)) {
       REXGPU_WARN("Texture swap dump {}: failed to write metadata ({})", it->stable_key, error);
+    } else {
+      std::string session_error;
+      if (!ac6::textures::WriteDdsToFile(
+              ac6::textures::GetTextureDumpCurrentSessionDdsPath(it->stable_key), dds_image,
+              &session_error)) {
+        REXGPU_WARN("Texture swap dump {}: failed to write session DDS ({})", it->stable_key,
+                    session_error);
+      } else if (!ac6::textures::WriteDumpMetadata(
+                     ac6::textures::GetTextureDumpCurrentSessionMetadataPath(it->stable_key),
+                     metadata, &session_error)) {
+        REXGPU_WARN("Texture swap dump {}: failed to write session metadata ({})",
+                    it->stable_key, session_error);
+      }
     }
 
     it = pending_texture_dumps_.erase(it);
@@ -2363,6 +2376,11 @@ bool D3D12TextureCache::ScheduleTextureDump(D3D12Texture& texture, DXGI_FORMAT d
       key.scaled_resolve != 0);
 
   if (dumped_texture_keys_.contains(stable_key) || ac6::textures::DumpExists(stable_key)) {
+    std::string mirror_error;
+    if (!ac6::textures::MirrorDumpToCurrentSession(stable_key, &mirror_error)) {
+      REXGPU_WARN("Texture swap dump {}: failed to mirror existing dump into session ({})",
+                  stable_key, mirror_error);
+    }
     dumped_texture_keys_.insert(stable_key);
     return false;
   }

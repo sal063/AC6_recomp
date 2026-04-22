@@ -1,0 +1,205 @@
+Texture Swap Modding Guide
+
+This guide is for modders who want to replace in-game textures without digging
+through the renderer code.
+
+What the system does
+
+The game can dump textures it sees at runtime as DDS files. You can edit those
+DDS files and place replacements in the override folders. The game will load
+your replacements the next time those textures are used.
+
+The texture swap system now supports:
+  - session-based dump browsing, so you can work from a small fresh folder
+  - exact one-file replacements with <stable_key>.dds
+  - manifest rules, so one DDS can replace multiple dumped textures
+
+Where dumps go
+
+Global dump history:
+
+  %USERPROFILE%\Documents\ac6recomp\texture_dumps\
+
+Current session pointer:
+
+  %USERPROFILE%\Documents\ac6recomp\texture_dumps\current_session.txt
+
+Current session folder:
+
+  %USERPROFILE%\Documents\ac6recomp\texture_dumps\sessions\<session_id>\
+
+The session folder is the main quality-of-life feature for modding. If you boot
+the game fresh and only visit one menu, that session folder should stay much
+smaller than the full dump history.
+
+Basic workflow
+
+1. Start with a clean target
+   Launch the game fresh if possible.
+   Go straight to the menu, HUD, or screen you want to mod.
+
+2. Open the current session folder
+   Read current_session.txt.
+   Open the session_path listed there.
+
+3. Identify the texture you want
+   Look through the DDS files in the current session folder.
+   Each DDS has a matching JSON file with the same stable key.
+
+4. Edit the DDS
+   Keep the same:
+     - format
+     - width and height
+     - array size or depth
+     - mip count
+
+5. Install the replacement
+   Put the edited DDS in one of these locations:
+
+   override/textures/<stable_key>.dds
+
+   or
+
+   mods/<mod_name>/textures/<stable_key>.dds
+
+6. Reload the texture
+   Restart the game or otherwise make the texture reload.
+
+Recommended folder layout
+
+For a loose override:
+
+  Documents\ac6recomp\
+    override\
+      textures\
+        tex_....dds
+
+For a mod:
+
+  Documents\ac6recomp\
+    mods\
+      my_ui_mod\
+        textures\
+          tex_....dds
+
+Override priority
+
+Priority is:
+  - override/textures first
+  - then mods/<mod_name>/textures
+  - among mods, later folder names win
+
+That means a loose override is best for testing, while a mod folder is better
+for packaging and sharing.
+
+Using one DDS for many textures
+
+Some UI assets exist in several menu-specific variants. Instead of copying the
+same replacement to many stable keys, you can use a manifest.
+
+Create:
+
+  override/textures/manifest.toml
+
+or:
+
+  mods/<mod_name>/textures/manifest.toml
+
+Example with exact keys:
+
+  [[swap]]
+  source = "shared/playstation_buttons.dds"
+  stable_keys = [
+    "tex_1111111111111111_bp00000000_mp00000000_2d_512x256x1_m1_fmt18_e0_t1_p0_s0_r0",
+    "tex_2222222222222222_bp00000000_mp00000000_2d_512x256x1_m1_fmt18_e0_t1_p0_s0_r0",
+  ]
+
+Example with wildcard matching:
+
+  [[swap]]
+  source = "shared/common_ui_256.dds"
+  stable_key_globs = [
+    "tex_*_2d_256x256x1_m1_fmt6_*",
+  ]
+
+Manifest behavior
+
+  - source is relative to the textures folder that contains manifest.toml
+  - exact <stable_key>.dds files still beat manifest rules in the same folder
+  - if more than one manifest rule matches, the later rule wins
+  - later mod folders still beat earlier mod folders
+
+Example mod layout with a manifest
+
+  Documents\ac6recomp\
+    mods\
+      playstation_buttons\
+        textures\
+          manifest.toml
+          shared\
+            playstation_buttons.dds
+
+How to use the JSON sidecars
+
+Each dumped texture has a matching JSON file. The JSON is useful when the DDS
+preview alone is not enough.
+
+Useful fields include:
+  - stable_key
+  - width
+  - height
+  - guest_format
+  - dxgi_format
+  - signature_tags
+  - active_vertex_shader_hash
+  - active_pixel_shader_hash
+
+You do not need to edit the JSON. It is there to help you identify and group
+textures.
+
+Good workflow for menu mods
+
+If you are replacing UI prompts, button art, or menu icons:
+
+1. Start a fresh session.
+2. Open only the target menu.
+3. Inspect the current session folder.
+4. Find the relevant DDS files.
+5. If several files are really the same logical art, create one shared DDS and
+   bind them together with manifest.toml.
+
+This is much faster than browsing the entire dump history every time.
+
+Troubleshooting
+
+Problem: The session folder exists but is empty.
+Cause: The textures you hit may already exist in the global dump history, or
+the relevant texture was never encountered.
+What to do: Trigger the texture again. Existing global dumps should now also be
+mirrored into the current session folder when they are encountered.
+
+Problem: My replacement does not load.
+Cause: The DDS does not match the original texture layout, or the stable key is
+wrong, or a higher-priority override is winning.
+What to do:
+  - confirm the filename or manifest rule matches the dumped stable key
+  - keep the same format, size, array/depth, and mip count
+  - test with override/textures first
+
+Problem: The wrong texture is replaced.
+Cause: A wildcard manifest rule is too broad.
+What to do: Narrow the stable_key_globs rule or switch to exact stable_keys.
+
+Practical advice
+
+  - Use the current session folder first, not the full dump folder.
+  - Use loose overrides for quick testing.
+  - Use mod folders plus a manifest for cleaner releases.
+  - Prefer one shared DDS plus manifest rules when the game has several
+    duplicates of the same art.
+
+Reference
+
+For the lower-level technical reference, see:
+
+  docs/TEXTURE_SWAPS.txt

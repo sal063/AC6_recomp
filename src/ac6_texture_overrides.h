@@ -78,7 +78,12 @@ std::string BuildTextureStableKey(uint64_t texture_key_hash, uint32_t base_page,
 
 std::filesystem::path GetTextureDumpDdsPath(std::string_view stable_key);
 std::filesystem::path GetTextureDumpMetadataPath(std::string_view stable_key);
+std::filesystem::path GetTextureDumpCurrentSessionRoot();
+std::filesystem::path GetTextureDumpCurrentSessionDdsPath(std::string_view stable_key);
+std::filesystem::path GetTextureDumpCurrentSessionMetadataPath(std::string_view stable_key);
+std::filesystem::path GetTextureDumpCurrentSessionInfoPath();
 bool DumpExists(std::string_view stable_key);
+bool MirrorDumpToCurrentSession(std::string_view stable_key, std::string* error_out = nullptr);
 
 std::optional<std::filesystem::path> ResolveReplacementDdsPath(std::string_view stable_key);
 

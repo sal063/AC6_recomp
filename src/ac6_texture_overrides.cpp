@@ -2,14 +2,20 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
+#include <rex/logging.h>
+#include <toml++/toml.hpp>
 
 REXCVAR_DECLARE(std::string, user_data_root);
 
@@ -95,12 +101,84 @@ struct DxgiLayoutInfo {
   const char* name;
 };
 
+struct TextureSwapRule {
+  std::filesystem::path source_path;
+  std::vector<std::string> stable_keys;
+  std::vector<std::string> stable_key_globs;
+};
+
+struct TextureSwapManifestCacheEntry {
+  bool present = false;
+  bool parse_failed = false;
+  std::filesystem::file_time_type last_write_time{};
+  std::vector<TextureSwapRule> rules;
+};
+
+std::mutex g_texture_swap_manifest_mutex;
+std::unordered_map<std::string, TextureSwapManifestCacheEntry> g_texture_swap_manifest_cache;
+
+bool EnsureParentExists(const std::filesystem::path& path, std::string* error_out);
+
 std::filesystem::path GetUserDataRoot() {
   const std::string user_root = REXCVAR_GET(user_data_root);
   if (!user_root.empty()) {
     return std::filesystem::path(user_root);
   }
   return rex::filesystem::GetUserFolder() / "ac6recomp";
+}
+
+std::filesystem::path GetTextureDumpRoot() {
+  return GetUserDataRoot() / REXCVAR_GET(ac6_texture_swaps_dump_dir);
+}
+
+std::string BuildTextureDumpSessionId() {
+  const auto now = std::chrono::system_clock::now();
+  const auto time_value = std::chrono::system_clock::to_time_t(now);
+  std::tm local_time{};
+#if defined(_WIN32)
+  localtime_s(&local_time, &time_value);
+#else
+  localtime_r(&time_value, &local_time);
+#endif
+  const auto milliseconds =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) %
+      std::chrono::seconds(1);
+
+  std::ostringstream stream;
+  stream << std::put_time(&local_time, "%Y%m%d_%H%M%S") << "_" << std::setw(3)
+         << std::setfill('0') << milliseconds.count();
+  return stream.str();
+}
+
+const std::string& GetTextureDumpSessionId() {
+  static const std::string session_id = BuildTextureDumpSessionId();
+  return session_id;
+}
+
+std::filesystem::path GetTextureDumpSessionsRoot() {
+  return GetTextureDumpRoot() / "sessions";
+}
+
+void PublishCurrentTextureDumpSessionInfo() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    const std::filesystem::path session_root =
+        GetTextureDumpSessionsRoot() / GetTextureDumpSessionId();
+    std::string error;
+    if (!EnsureParentExists(session_root / "placeholder", &error)) {
+      REXLOG_WARN("Texture swap dump session: failed to create session root ({})", error);
+      return;
+    }
+
+    std::ofstream file(GetTextureDumpRoot() / "current_session.txt", std::ios::out | std::ios::trunc);
+    if (!file) {
+      REXLOG_WARN("Texture swap dump session: failed to write current_session.txt");
+      return;
+    }
+
+    file << "session_id=" << GetTextureDumpSessionId() << "\n";
+    file << "session_path=" << session_root.string() << "\n";
+  });
 }
 
 bool EnsureParentExists(const std::filesystem::path& path, std::string* error_out) {
@@ -141,6 +219,266 @@ std::string EscapeJson(std::string_view value) {
     }
   }
   return escaped;
+}
+
+char AsciiToLower(char value) {
+  return (value >= 'A' && value <= 'Z') ? char(value - 'A' + 'a') : value;
+}
+
+bool EqualsIgnoreAsciiCase(std::string_view lhs, std::string_view rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    if (AsciiToLower(lhs[i]) != AsciiToLower(rhs[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool WildcardMatchRecursive(std::string_view pattern, std::string_view value, size_t pattern_index,
+                            size_t value_index) {
+  while (pattern_index < pattern.size()) {
+    const char pattern_char = pattern[pattern_index];
+    if (pattern_char == '*') {
+      while (pattern_index + 1 < pattern.size() && pattern[pattern_index + 1] == '*') {
+        ++pattern_index;
+      }
+      if (pattern_index + 1 == pattern.size()) {
+        return true;
+      }
+      for (size_t candidate = value_index; candidate <= value.size(); ++candidate) {
+        if (WildcardMatchRecursive(pattern, value, pattern_index + 1, candidate)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (value_index >= value.size()) {
+      return false;
+    }
+    if (pattern_char != '?' && AsciiToLower(pattern_char) != AsciiToLower(value[value_index])) {
+      return false;
+    }
+    ++pattern_index;
+    ++value_index;
+  }
+  return value_index == value.size();
+}
+
+bool WildcardMatch(std::string_view pattern, std::string_view value) {
+  return WildcardMatchRecursive(pattern, value, 0, 0);
+}
+
+std::vector<std::string> ParseStringList(const toml::node_view<const toml::node>& node) {
+  std::vector<std::string> values;
+  if (const auto value = node.value<std::string>()) {
+    values.push_back(*value);
+    return values;
+  }
+
+  const toml::array* array = node.as_array();
+  if (!array) {
+    return values;
+  }
+
+  values.reserve(array->size());
+  for (const toml::node& item : *array) {
+    if (const auto string_value = item.value<std::string>()) {
+      values.push_back(*string_value);
+    }
+  }
+  return values;
+}
+
+bool PathStartsWith(const std::filesystem::path& path, const std::filesystem::path& prefix) {
+  auto path_it = path.begin();
+  auto prefix_it = prefix.begin();
+  while (prefix_it != prefix.end()) {
+    if (path_it == path.end()) {
+      return false;
+    }
+    if (!EqualsIgnoreAsciiCase(path_it->string(), prefix_it->string())) {
+      return false;
+    }
+    ++path_it;
+    ++prefix_it;
+  }
+  return true;
+}
+
+std::optional<std::filesystem::path> ResolveManifestSourcePath(const std::filesystem::path& root,
+                                                               std::string_view source_value) {
+  if (source_value.empty()) {
+    return std::nullopt;
+  }
+
+  const std::filesystem::path source_path = std::filesystem::path(source_value);
+  if (source_path.is_absolute()) {
+    return std::nullopt;
+  }
+
+  const std::filesystem::path normalized_root = root.lexically_normal();
+  const std::filesystem::path resolved = (normalized_root / source_path).lexically_normal();
+  if (!PathStartsWith(resolved, normalized_root)) {
+    return std::nullopt;
+  }
+
+  return resolved;
+}
+
+std::filesystem::path GetTextureSwapManifestPath(const std::filesystem::path& root) {
+  return root / "manifest.toml";
+}
+
+TextureSwapManifestCacheEntry LoadTextureSwapManifestCacheEntry(const std::filesystem::path& root) {
+  TextureSwapManifestCacheEntry entry;
+  const std::filesystem::path manifest_path = GetTextureSwapManifestPath(root);
+  std::error_code ec;
+  if (!std::filesystem::exists(manifest_path, ec) || ec) {
+    return entry;
+  }
+
+  entry.present = true;
+  entry.last_write_time = std::filesystem::last_write_time(manifest_path, ec);
+  if (ec) {
+    entry.last_write_time = {};
+  }
+
+  toml::table manifest;
+  try {
+    manifest = toml::parse_file(manifest_path.string());
+  } catch (const toml::parse_error& err) {
+    entry.parse_failed = true;
+    REXLOG_WARN("Texture swap manifest {}: parse error: {}", manifest_path.string(), err.description());
+    return entry;
+  }
+
+  const toml::array* swaps = manifest["swap"].as_array();
+  if (!swaps) {
+    return entry;
+  }
+
+  for (const toml::node& swap_node : *swaps) {
+    const toml::table* table = swap_node.as_table();
+    if (!table) {
+      continue;
+    }
+
+    const auto source_value = (*table)["source"].value<std::string>();
+    if (!source_value) {
+      continue;
+    }
+
+    std::optional<std::filesystem::path> source_path = ResolveManifestSourcePath(root, *source_value);
+    if (!source_path) {
+      REXLOG_WARN("Texture swap manifest {}: ignoring rule with invalid source '{}'",
+                  manifest_path.string(), *source_value);
+      continue;
+    }
+
+    TextureSwapRule rule;
+    rule.source_path = *source_path;
+    auto append_values = [](std::vector<std::string>& out, std::vector<std::string>&& values) {
+      out.insert(out.end(), std::make_move_iterator(values.begin()), std::make_move_iterator(values.end()));
+    };
+
+    append_values(rule.stable_keys, ParseStringList((*table)["stable_key"]));
+    append_values(rule.stable_keys, ParseStringList((*table)["stable_keys"]));
+    append_values(rule.stable_keys, ParseStringList((*table)["key"]));
+    append_values(rule.stable_keys, ParseStringList((*table)["keys"]));
+
+    append_values(rule.stable_key_globs, ParseStringList((*table)["stable_key_glob"]));
+    append_values(rule.stable_key_globs, ParseStringList((*table)["stable_key_globs"]));
+    append_values(rule.stable_key_globs, ParseStringList((*table)["pattern"]));
+    append_values(rule.stable_key_globs, ParseStringList((*table)["patterns"]));
+
+    if (rule.stable_keys.empty() && rule.stable_key_globs.empty()) {
+      REXLOG_WARN("Texture swap manifest {}: ignoring rule for {} with no keys or patterns",
+                  manifest_path.string(), rule.source_path.string());
+      continue;
+    }
+
+    entry.rules.push_back(std::move(rule));
+  }
+
+  return entry;
+}
+
+const TextureSwapManifestCacheEntry& GetTextureSwapManifestCacheEntry(const std::filesystem::path& root) {
+  const std::filesystem::path normalized_root = root.lexically_normal();
+  const std::string cache_key = normalized_root.string();
+  const std::filesystem::path manifest_path = GetTextureSwapManifestPath(normalized_root);
+
+  std::error_code ec;
+  const bool present = std::filesystem::exists(manifest_path, ec) && !ec;
+  std::filesystem::file_time_type last_write_time{};
+  if (present) {
+    last_write_time = std::filesystem::last_write_time(manifest_path, ec);
+    if (ec) {
+      last_write_time = {};
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(g_texture_swap_manifest_mutex);
+  auto it = g_texture_swap_manifest_cache.find(cache_key);
+  if (it == g_texture_swap_manifest_cache.end() || it->second.present != present ||
+      (present && it->second.last_write_time != last_write_time)) {
+    it = g_texture_swap_manifest_cache
+             .insert_or_assign(cache_key, LoadTextureSwapManifestCacheEntry(normalized_root))
+             .first;
+  }
+
+  return it->second;
+}
+
+bool TextureSwapRuleMatches(const TextureSwapRule& rule, std::string_view stable_key) {
+  for (const std::string& exact_key : rule.stable_keys) {
+    if (EqualsIgnoreAsciiCase(exact_key, stable_key)) {
+      return true;
+    }
+  }
+  for (const std::string& pattern : rule.stable_key_globs) {
+    if (WildcardMatch(pattern, stable_key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<std::filesystem::path> ResolveManifestReplacementDdsPath(
+    const std::filesystem::path& root, std::string_view stable_key) {
+  const TextureSwapManifestCacheEntry& entry = GetTextureSwapManifestCacheEntry(root);
+  if (!entry.present || entry.parse_failed || entry.rules.empty()) {
+    return std::nullopt;
+  }
+
+  std::optional<std::filesystem::path> resolved;
+  std::error_code ec;
+  for (const TextureSwapRule& rule : entry.rules) {
+    if (!TextureSwapRuleMatches(rule, stable_key)) {
+      continue;
+    }
+    if (std::filesystem::exists(rule.source_path, ec)) {
+      resolved = rule.source_path;
+    }
+  }
+
+  return resolved;
+}
+
+std::optional<std::filesystem::path> ResolveReplacementDdsPathInRoot(
+    const std::filesystem::path& root, std::string_view stable_key) {
+  const std::filesystem::path file_name = std::string(stable_key) + ".dds";
+  std::error_code ec;
+
+  const std::filesystem::path exact_path = root / file_name;
+  if (std::filesystem::exists(exact_path, ec)) {
+    return exact_path;
+  }
+
+  return ResolveManifestReplacementDdsPath(root, stable_key);
 }
 
 std::string HexU32(uint32_t value) {
@@ -390,18 +728,88 @@ std::string BuildTextureStableKey(uint64_t texture_key_hash, uint32_t base_page,
 }
 
 std::filesystem::path GetTextureDumpDdsPath(std::string_view stable_key) {
-  return GetUserDataRoot() / REXCVAR_GET(ac6_texture_swaps_dump_dir) /
-         (std::string(stable_key) + ".dds");
+  PublishCurrentTextureDumpSessionInfo();
+  return GetTextureDumpRoot() / (std::string(stable_key) + ".dds");
 }
 
 std::filesystem::path GetTextureDumpMetadataPath(std::string_view stable_key) {
-  return GetUserDataRoot() / REXCVAR_GET(ac6_texture_swaps_dump_dir) /
-         (std::string(stable_key) + ".json");
+  PublishCurrentTextureDumpSessionInfo();
+  return GetTextureDumpRoot() / (std::string(stable_key) + ".json");
+}
+
+std::filesystem::path GetTextureDumpCurrentSessionRoot() {
+  PublishCurrentTextureDumpSessionInfo();
+  return GetTextureDumpSessionsRoot() / GetTextureDumpSessionId();
+}
+
+std::filesystem::path GetTextureDumpCurrentSessionDdsPath(std::string_view stable_key) {
+  return GetTextureDumpCurrentSessionRoot() / (std::string(stable_key) + ".dds");
+}
+
+std::filesystem::path GetTextureDumpCurrentSessionMetadataPath(std::string_view stable_key) {
+  return GetTextureDumpCurrentSessionRoot() / (std::string(stable_key) + ".json");
+}
+
+std::filesystem::path GetTextureDumpCurrentSessionInfoPath() {
+  PublishCurrentTextureDumpSessionInfo();
+  return GetTextureDumpRoot() / "current_session.txt";
 }
 
 bool DumpExists(std::string_view stable_key) {
   std::error_code ec;
   return std::filesystem::exists(GetTextureDumpDdsPath(stable_key), ec);
+}
+
+bool MirrorDumpToCurrentSession(std::string_view stable_key, std::string* error_out) {
+  PublishCurrentTextureDumpSessionInfo();
+
+  const std::filesystem::path source_dds = GetTextureDumpDdsPath(stable_key);
+  const std::filesystem::path source_json = GetTextureDumpMetadataPath(stable_key);
+  const std::filesystem::path dest_dds = GetTextureDumpCurrentSessionDdsPath(stable_key);
+  const std::filesystem::path dest_json = GetTextureDumpCurrentSessionMetadataPath(stable_key);
+
+  std::error_code ec;
+  if (!std::filesystem::exists(source_dds, ec) || ec) {
+    if (error_out) {
+      *error_out = "source DDS dump does not exist";
+    }
+    return false;
+  }
+  ec.clear();
+  if (!std::filesystem::exists(source_json, ec) || ec) {
+    if (error_out) {
+      *error_out = "source metadata dump does not exist";
+    }
+    return false;
+  }
+
+  std::string ensure_error;
+  if (!EnsureParentExists(dest_dds, &ensure_error) || !EnsureParentExists(dest_json, &ensure_error)) {
+    if (error_out) {
+      *error_out = ensure_error;
+    }
+    return false;
+  }
+
+  auto copy_if_needed = [&](const std::filesystem::path& source, const std::filesystem::path& dest,
+                            const char* label) -> bool {
+    std::error_code local_ec;
+    if (std::filesystem::exists(dest, local_ec) && !local_ec) {
+      return true;
+    }
+    local_ec.clear();
+    if (!std::filesystem::copy_file(source, dest, std::filesystem::copy_options::overwrite_existing,
+                                    local_ec)) {
+      if (error_out) {
+        *error_out = std::string("failed to mirror ") + label + ": " + local_ec.message();
+      }
+      return false;
+    }
+    return true;
+  };
+
+  return copy_if_needed(source_dds, dest_dds, "DDS") &&
+         copy_if_needed(source_json, dest_json, "metadata");
 }
 
 std::optional<std::filesystem::path> ResolveReplacementDdsPath(std::string_view stable_key) {
@@ -410,12 +818,11 @@ std::optional<std::filesystem::path> ResolveReplacementDdsPath(std::string_view 
   }
 
   const std::filesystem::path user_root = GetUserDataRoot();
-  const std::filesystem::path file_name = std::string(stable_key) + ".dds";
   std::error_code ec;
 
-  const std::filesystem::path loose_path =
-      user_root / REXCVAR_GET(ac6_texture_swaps_override_dir) / file_name;
-  if (std::filesystem::exists(loose_path, ec)) {
+  const std::filesystem::path loose_root = user_root / REXCVAR_GET(ac6_texture_swaps_override_dir);
+  if (const std::optional<std::filesystem::path> loose_path =
+          ResolveReplacementDdsPathInRoot(loose_root, stable_key)) {
     return loose_path;
   }
 
@@ -437,8 +844,8 @@ std::optional<std::filesystem::path> ResolveReplacementDdsPath(std::string_view 
 
   std::optional<std::filesystem::path> resolved;
   for (const std::filesystem::path& mod_root : mod_roots) {
-    const std::filesystem::path candidate = mod_root / "textures" / file_name;
-    if (std::filesystem::exists(candidate, ec)) {
+    if (const std::optional<std::filesystem::path> candidate =
+            ResolveReplacementDdsPathInRoot(mod_root / "textures", stable_key)) {
       resolved = candidate;
     }
   }

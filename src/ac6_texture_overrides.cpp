@@ -21,7 +21,7 @@ REXCVAR_DECLARE(std::string, user_data_root);
 
 REXCVAR_DEFINE_BOOL(ac6_texture_swaps_enabled, true, "AC6/TextureSwaps",
                     "Enable AC6 texture dump and replacement support");
-REXCVAR_DEFINE_BOOL(ac6_texture_swaps_dump_enabled, true, "AC6/TextureSwaps",
+REXCVAR_DEFINE_BOOL(ac6_texture_swaps_dump_enabled, false, "AC6/TextureSwaps",
                     "Dump host-ready textures to the user-data texture dump folder");
 REXCVAR_DEFINE_BOOL(ac6_texture_swaps_replace_enabled, true, "AC6/TextureSwaps",
                     "Load matching replacement DDS files from the user-data texture override folders");

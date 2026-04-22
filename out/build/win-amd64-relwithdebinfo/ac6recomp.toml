@@ -1,5 +1,5 @@
 # Auto-generated cvar configuration
-ac6_render_capture = true
+ac6_render_capture = false
 ac6_timing_hooks_enabled = false
 log_level = "debug"
 log_file = "ac6recomp.log"

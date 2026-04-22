@@ -56,7 +56,12 @@ endif()
 
 # Enforce Clang18 compiler
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    message(FATAL_ERROR "ReXGlue requires Clang compiler. Please set CMAKE_CXX_COMPILER to clang++")
+    message(FATAL_ERROR
+        "ReXGlue requires Clang compiler.\n"
+        "  Detected compiler ID: ${CMAKE_CXX_COMPILER_ID}\n"
+        "  Detected compiler: ${CMAKE_CXX_COMPILER}\n"
+        "  Hint: configure this repo with its CMake preset instead of plain 'cmake -L',\n"
+        "        for example: cmake --preset win-amd64-relwithdebinfo")
 endif()
 
 if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "18.0")

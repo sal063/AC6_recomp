@@ -40,6 +40,8 @@ cmake --build --preset win-amd64-relwithdebinfo
 
 The executable is placed at `out/build/win-amd64-relwithdebinfo/ac6recomp.exe`.
 
+On Windows, use the preset commands above rather than plain `cmake -L` in the repo root. If you previously configured from an `x86` Visual Studio prompt or with the wrong compiler on `PATH`, delete `out/build/win-amd64-relwithdebinfo` and re-run the preset from a normal 64-bit PowerShell/CMD window or an x64 Native Tools prompt.
+
 ## Modding Docs
 
 - [Texture Swap Modding Guide](docs/TEXTURE_SWAP_MODDING_GUIDE.txt)

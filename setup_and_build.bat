@@ -57,6 +57,26 @@ echo [OK] All prerequisites found!
 echo.
 
 echo =========================================
+echo Environment Check
+echo =========================================
+if /I "%VSCMD_ARG_TGT_ARCH%"=="x86" (
+    echo [ERROR] Detected an x86 Visual Studio developer environment.
+    echo This project must be configured from an x64 environment.
+    echo Close this shell and reopen a normal 64-bit PowerShell/CMD window, or use an x64 Native Tools prompt.
+    pause
+    exit /b 1
+)
+if /I "%Platform%"=="x86" (
+    echo [ERROR] Detected Platform=x86 in the current shell.
+    echo This project must be configured for a 64-bit target.
+    echo Close this shell and reopen a normal 64-bit PowerShell/CMD window, or use an x64 Native Tools prompt.
+    pause
+    exit /b 1
+)
+echo [OK] No x86-only VS environment detected.
+echo.
+
+echo =========================================
 echo Git Branch Check
 echo =========================================
 for /f "delims=" %%i in ('git rev-parse --abbrev-ref HEAD') do set CURRENT_BRANCH=%%i

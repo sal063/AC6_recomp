@@ -11,6 +11,9 @@ add_library(rexfilesystem STATIC
     devices/null_device.cpp
     devices/null_entry.cpp
     devices/null_file.cpp
+    devices/stfs_container_device.cpp
+    devices/stfs_container_entry.cpp
+    devices/stfs_container_file.cpp
 )
 add_library(rex::filesystem ALIAS rexfilesystem)
 

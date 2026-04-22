@@ -1,6 +1,12 @@
 /**
- * ReXGlue runtime - AC6 Recompilation project
- * Copyright (c) 2026 Tom Clay. All rights reserved.
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ *
+ * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
 #pragma once
@@ -157,8 +163,11 @@ class ContentManager {
   X_RESULT SetContentThumbnail(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data,
                                std::vector<uint8_t> buffer);
   X_RESULT DeleteContent(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data);
+  X_RESULT UnmountContent(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data);
+  X_RESULT UnmountAndDeleteContent(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data);
 
-  X_RESULT WriteContentHeaderFile(uint64_t xuid, XCONTENT_AGGREGATE_DATA data);
+  X_RESULT WriteContentHeaderFile(uint64_t xuid, XCONTENT_AGGREGATE_DATA data,
+                                  uint32_t license_mask = 0);
   X_RESULT ReadContentHeaderFile(const std::string_view file_name, uint64_t xuid, uint32_t title_id,
                                  XContentType content_type, XCONTENT_AGGREGATE_DATA& data) const;
 
@@ -169,6 +178,11 @@ class ContentManager {
   // Returns the host filesystem path for an open content package, or empty.
   std::filesystem::path GetOpenPackagePath(const std::string_view root_name) const;
 
+  // Installs an STFS content package from an arbitrary host path.
+  // Extracts the package into root_path_/0000000000000000/{title_id}/00000002/{filename}/
+  // and writes a .header file for XAM enumeration.
+  X_RESULT InstallContent(const std::filesystem::path& package_path);
+
  private:
   std::filesystem::path ResolvePackageRoot(uint64_t xuid, XContentType content_type,
                                            uint32_t title_id = -1);
@@ -176,6 +190,12 @@ class ContentManager {
   std::filesystem::path ResolvePackageHeaderPath(const std::string_view file_name, uint64_t xuid,
                                                  uint32_t title_id,
                                                  XContentType content_type) const;
+
+  std::unordered_map<string::string_key_case, ContentPackage*,
+                     string::string_key_case::Hash>::iterator
+  FindOpenPackageByData(const XCONTENT_AGGREGATE_DATA& data);
+  ContentPackage* DetachPackage(std::unordered_map<string::string_key_case, ContentPackage*,
+                                                   string::string_key_case::Hash>::iterator it);
 
   KernelState* kernel_state_;
   std::filesystem::path root_path_;

@@ -1,7 +1,6 @@
 // Native UI runtime - Win32 windowed app entry point
 // Part of the AC6 Recompilation native presenter/window layer
 
-#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <memory>
@@ -13,8 +12,6 @@
 #include <rex/platform.h>
 #include <native/ui/windowed_app.h>
 #include <native/ui/windowed_app_context_win.h>
-
-REXCVAR_DEFINE_BOOL(enable_console, true, "UI/Window", "Enable console window on Windows");
 
 namespace {
 
@@ -59,38 +56,19 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
   }
   auto remaining = rex::cvar::Init(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
   rex::cvar::ApplyEnvironment();
-
-  // Force logging to a file immediately
-  auto log_config = rex::BuildLogConfig("ac6_boot.log", "info", {});
-  rex::InitLogging(log_config);
-  REXLOG_INFO("wWinMain started");
-
-  // Allocate a console for debugging if enabled
-  if (REXCVAR_GET(enable_console)) {
-    AllocConsole();
-    FILE* fp;
-    freopen_s(&fp, "CONOUT$", "w", stdout);
-    freopen_s(&fp, "CONOUT$", "w", stderr);
-    freopen_s(&fp, "CONIN$", "r", stdin);
-    printf("Console attached for debugging\n");
-  }
+  rex::InitLoggingEarly();
 
   int result;
 
   {
-    REXLOG_INFO("wWinMain: Creating Win32WindowedAppContext...");
     rex::ui::Win32WindowedAppContext app_context(hinstance, show_cmd);
     // TODO(Triang3l): Initialize creates a window. Set DPI awareness via the
     // manifest.
-    REXLOG_INFO("wWinMain: Initializing app context...");
     if (!app_context.Initialize()) {
-      REXLOG_ERROR("wWinMain: app_context.Initialize failed");
       return EXIT_FAILURE;
     }
 
-    REXLOG_INFO("wWinMain: Getting app creator...");
     std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
-    REXLOG_INFO("wWinMain: App instance created");
 
     // Match remaining positional args to app's expected options
     const auto& option_names = app->GetPositionalOptions();
@@ -103,24 +81,14 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
 
     // Initialize COM on the UI thread with the apartment-threaded concurrency
     // model, so dialogs can be used.
-    REXLOG_INFO("wWinMain: Initializing COM...");
     if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
-      REXLOG_ERROR("wWinMain: CoInitializeEx failed");
       return EXIT_FAILURE;
     }
 
     // TODO: Port InitializeWin32App from Xenia
     // rex::InitializeWin32App(app->GetName());
 
-    REXLOG_INFO("wWinMain: Calling app->OnInitialize()...");
-    if (!app->OnInitialize()) {
-      REXLOG_ERROR("wWinMain: app->OnInitialize failed");
-      return EXIT_FAILURE;
-    }
-
-    REXLOG_INFO("wWinMain: Entering main message loop...");
-    result = app_context.RunMainMessageLoop();
-    REXLOG_INFO("wWinMain: Main message loop exited with result {}", result);
+    result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
 
     app->InvokeOnDestroy();
   }

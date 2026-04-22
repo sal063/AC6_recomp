@@ -89,25 +89,33 @@ bool ReXApp::OnInitialize() {
   user_data_root_ = std::move(path_config.user_data_root);
   update_data_root_ = std::move(path_config.update_data_root);
 
+  auto config_path = exe_dir / (std::string(GetName()) + ".toml");
+
+  // Load saved config (CVARs) before anything reads them
+  if (std::filesystem::exists(config_path)) {
+    rex::cvar::LoadConfig(config_path);
+  }
+
   // Logging setup from CVARs
   std::string log_file_cvar = REXCVAR_GET(log_file);
   std::string log_level_str = REXCVAR_GET(log_level);
   if (REXCVAR_GET(log_verbose) && log_level_str == "info") {
     log_level_str = "trace";
   }
+  auto category_levels = rex::ParseCategoryLevelsFromConfig(config_path);
   auto log_config = rex::BuildLogConfig(log_file_cvar.empty() ? nullptr : log_file_cvar.c_str(),
-                                        log_level_str, {});
+                                        log_level_str, category_levels);
+  if (log_file_cvar.empty()) {
+    log_config.app_name = std::string(GetName());
+    log_config.log_dir = (exe_dir / "logs").string();
+  }
   rex::InitLogging(log_config);
   rex::RegisterLogLevelCallback();
 
   // Attach log capture sink to all loggers for the console overlay
   log_sink_ = std::make_shared<rex::LogCaptureSink>();
   rex::AddSink(log_sink_);
-
-  // Load saved config (CVARs) before anything reads them
-  auto config_path = exe_dir / (std::string(GetName()) + ".toml");
   if (std::filesystem::exists(config_path)) {
-    rex::cvar::LoadConfig(config_path);
     REXLOG_INFO("Loaded config: {}", config_path.filename().string());
   }
 
@@ -210,7 +218,7 @@ bool ReXApp::OnInitialize() {
         debug_overlay_ = std::make_unique<ui::DebugOverlayDialog>(imgui_drawer_.get());
         console_overlay_ = std::make_unique<ui::ConsoleDialog>(imgui_drawer_.get(), log_sink_);
         settings_overlay_ = std::make_unique<ui::SettingsDialog>(
-            imgui_drawer_.get(), exe_dir / (std::string(GetName()) + ".toml"));
+            imgui_drawer_.get(), config_path);
 
         // Allow subclass to add custom dialogs
         OnCreateDialogs(imgui_drawer_.get());

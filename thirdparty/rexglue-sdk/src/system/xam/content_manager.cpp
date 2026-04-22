@@ -1,18 +1,27 @@
 /**
- * ReXGlue runtime - AC6 Recompilation project
- * Copyright (c) 2026 Tom Clay. All rights reserved.
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ *
+ * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
 #include <array>
 #include <cstring>
+#include <queue>
 #include <string>
 
 #include <fmt/format.h>
 
 #include <rex/filesystem.h>
-#include <native/filesystem/devices/host_path_device.h>
+#include <rex/filesystem/devices/host_path_device.h>
+#include <rex/filesystem/devices/stfs_container_device.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/xam/content_device.h>
 #include <rex/system/xam/content_manager.h>
 #include <rex/system/xfile.h>
 #include <rex/system/xobject.h>
@@ -179,7 +188,8 @@ bool ContentManager::ContentExists(uint64_t xuid, const XCONTENT_AGGREGATE_DATA&
   return std::filesystem::exists(path);
 }
 
-X_RESULT ContentManager::WriteContentHeaderFile(uint64_t xuid, XCONTENT_AGGREGATE_DATA data) {
+X_RESULT ContentManager::WriteContentHeaderFile(uint64_t xuid, XCONTENT_AGGREGATE_DATA data,
+                                                uint32_t license_mask) {
   if (data.title_id == uint32_t(-1)) {
     data.title_id = kernel_state_->title_id();
   }
@@ -205,6 +215,9 @@ X_RESULT ContentManager::WriteContentHeaderFile(uint64_t xuid, XCONTENT_AGGREGAT
     return X_ERROR_FILE_NOT_FOUND;
   }
   fwrite(&data, 1, sizeof(XCONTENT_AGGREGATE_DATA), file);
+  if (license_mask != 0) {
+    fwrite(&license_mask, 1, sizeof(license_mask), file);
+  }
   fclose(file);
   return X_ERROR_SUCCESS;
 }
@@ -310,9 +323,7 @@ X_RESULT ContentManager::CloseContent(const std::string_view root_name) {
     if (it == open_packages_.end()) {
       return X_ERROR_FILE_NOT_FOUND;
     }
-    CloseOpenedFilesFromContent(root_name);
-    package = it->second;
-    open_packages_.erase(it);
+    package = DetachPackage(it);
   }
   delete package;
   return X_ERROR_SUCCESS;
@@ -363,15 +374,70 @@ X_RESULT ContentManager::DeleteContent(uint64_t xuid, const XCONTENT_AGGREGATE_D
 
   auto package_path = ResolvePackagePath(xuid, data);
   std::error_code ec;
-  auto removed = std::filesystem::remove_all(package_path, ec);
+  auto dir_removed = std::filesystem::remove_all(package_path, ec);
   if (ec) {
     return X_ERROR_ACCESS_DENIED;
   }
-  if (removed > 0) {
+
+  uint64_t used_xuid = (data.xuid != uint64_t(-1) && data.xuid != 0) ? uint64_t(data.xuid) : xuid;
+  auto header_path =
+      ResolvePackageHeaderPath(data.file_name(), used_xuid, data.title_id, data.content_type);
+  std::error_code ec2;
+  bool header_removed = std::filesystem::remove(header_path, ec2);
+
+  if (dir_removed > 0 || header_removed) {
     return X_ERROR_SUCCESS;
-  } else {
-    return X_ERROR_FILE_NOT_FOUND;
   }
+  return X_ERROR_FILE_NOT_FOUND;
+}
+
+X_RESULT ContentManager::UnmountContent(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data) {
+  ContentPackage* package = nullptr;
+  {
+    auto global_lock = global_critical_region_.Acquire();
+    auto it = FindOpenPackageByData(data);
+    if (it == open_packages_.end()) {
+      return X_ERROR_FILE_NOT_FOUND;
+    }
+    package = DetachPackage(it);
+  }
+  delete package;
+  return X_ERROR_SUCCESS;
+}
+
+X_RESULT ContentManager::UnmountAndDeleteContent(uint64_t xuid,
+                                                 const XCONTENT_AGGREGATE_DATA& data) {
+  // Unmount phase: tolerant of not-mounted state
+  ContentPackage* package = nullptr;
+  {
+    auto global_lock = global_critical_region_.Acquire();
+    auto it = FindOpenPackageByData(data);
+    if (it != open_packages_.end()) {
+      package = DetachPackage(it);
+    }
+  }
+  delete package;
+
+  // Delete phase: remove package directory and .header file
+  auto package_path = ResolvePackagePath(xuid, data);
+
+  uint64_t used_xuid = (data.xuid != uint64_t(-1) && data.xuid != 0) ? uint64_t(data.xuid) : xuid;
+  auto header_path =
+      ResolvePackageHeaderPath(data.file_name(), used_xuid, data.title_id, data.content_type);
+
+  std::error_code ec;
+  auto dir_removed = std::filesystem::remove_all(package_path, ec);
+  if (ec) {
+    return X_ERROR_ACCESS_DENIED;
+  }
+
+  std::error_code ec2;
+  bool header_removed = std::filesystem::remove(header_path, ec2);
+
+  if (dir_removed > 0 || header_removed) {
+    return X_ERROR_SUCCESS;
+  }
+  return X_ERROR_FILE_NOT_FOUND;
 }
 
 std::filesystem::path ContentManager::ResolveGameUserContentPath() {
@@ -383,11 +449,46 @@ std::filesystem::path ContentManager::ResolveGameUserContentPath() {
   return root_path_ / title_id / kGameUserContentDirName / user_name;
 }
 
+std::unordered_map<string::string_key_case, ContentPackage*,
+                   string::string_key_case::Hash>::iterator
+ContentManager::FindOpenPackageByData(const XCONTENT_AGGREGATE_DATA& data) {
+  // Resolve kCurrentlyRunningTitleId so both sides compare actual title IDs.
+  uint32_t query_title = data.title_id;
+  if (query_title == kCurrentlyRunningTitleId) {
+    query_title = kernel_state_->title_id();
+  }
+
+  for (auto it = open_packages_.begin(); it != open_packages_.end(); ++it) {
+    const auto& pkg = it->second->GetPackageContentData();
+
+    uint32_t pkg_title = pkg.title_id;
+    if (pkg_title == kCurrentlyRunningTitleId) {
+      pkg_title = kernel_state_->title_id();
+    }
+
+    // Match on content_type + file_name + resolved title_id.
+    // device_id is a virtual storage selector, not a content identifier.
+    if (data.content_type == pkg.content_type && data.file_name() == pkg.file_name() &&
+        query_title == pkg_title) {
+      return it;
+    }
+  }
+  return open_packages_.end();
+}
+
+ContentPackage* ContentManager::DetachPackage(
+    std::unordered_map<string::string_key_case, ContentPackage*,
+                       string::string_key_case::Hash>::iterator it) {
+  CloseOpenedFilesFromContent(it->first.view());
+  ContentPackage* package = it->second;
+  open_packages_.erase(it);
+  return package;
+}
+
 bool ContentManager::IsContentOpen(const XCONTENT_AGGREGATE_DATA& data) const {
-  return std::any_of(open_packages_.cbegin(), open_packages_.cend(),
-                     [data](std::pair<string::string_key_case, ContentPackage*> content) {
-                       return data == content.second->GetPackageContentData();
-                     });
+  return std::any_of(open_packages_.cbegin(), open_packages_.cend(), [&data](const auto& content) {
+    return data == content.second->GetPackageContentData();
+  });
 }
 
 std::filesystem::path ContentManager::GetOpenPackagePath(const std::string_view root_name) const {
@@ -415,6 +516,131 @@ void ContentManager::CloseOpenedFilesFromContent(const std::string_view root_nam
       file->ReleaseHandle();
     }
   }
+}
+
+static X_RESULT ExtractEntry(rex::filesystem::Entry* entry,
+                             const std::filesystem::path& base_path) {
+  auto dest_path = base_path / rex::to_path(rex::string::utf8_fix_path_separators(entry->path()));
+
+  if (entry->attributes() & rex::filesystem::kFileAttributeDirectory) {
+    std::error_code ec;
+    std::filesystem::create_directories(dest_path, ec);
+    if (ec) {
+      return X_ERROR_ACCESS_DENIED;
+    }
+    return X_ERROR_SUCCESS;
+  }
+
+  // Ensure parent directory exists
+  std::error_code ec;
+  std::filesystem::create_directories(dest_path.parent_path(), ec);
+
+  rex::filesystem::File* in_file = nullptr;
+  X_STATUS status = entry->Open(rex::filesystem::FileAccess::kFileReadData, &in_file);
+  if (status != X_STATUS_SUCCESS) {
+    return X_ERROR_ACCESS_DENIED;
+  }
+
+  auto out_file = rex::filesystem::OpenFile(dest_path, "wb");
+  if (!out_file) {
+    in_file->Destroy();
+    return X_ERROR_ACCESS_DENIED;
+  }
+
+  constexpr size_t kBufferSize = 4 * 1024 * 1024;  // 4 MiB
+  auto buffer = std::make_unique<uint8_t[]>(kBufferSize);
+  size_t remaining = entry->size();
+  size_t offset = 0;
+
+  while (remaining > 0) {
+    size_t bytes_read = 0;
+    size_t to_read = std::min(remaining, kBufferSize);
+    in_file->ReadSync(std::span<uint8_t>(buffer.get(), to_read), offset, &bytes_read);
+    if (bytes_read == 0) {
+      break;
+    }
+    fwrite(buffer.get(), 1, bytes_read, out_file);
+    offset += bytes_read;
+    remaining -= bytes_read;
+  }
+
+  fclose(out_file);
+  in_file->Destroy();
+  return X_ERROR_SUCCESS;
+}
+
+X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_path) {
+  if (!std::filesystem::exists(package_path)) {
+    return X_ERROR_FILE_NOT_FOUND;
+  }
+
+  // Mount the STFS package as a virtual filesystem device
+  auto device = std::make_unique<rex::filesystem::StfsContainerDevice>("", package_path);
+  if (!device->Initialize()) {
+    return X_ERROR_ACCESS_DENIED;
+  }
+
+  // Derive install destination:
+  // root_path_/0000000000000000/{title_id}/00000002/{filename}/
+  auto file_name = rex::path_to_utf8(package_path.filename());
+
+  XCONTENT_AGGREGATE_DATA content_data;
+  content_data.device_id = static_cast<uint32_t>(DummyDeviceId::HDD);
+  content_data.content_type = XContentType::kMarketplaceContent;
+  content_data.title_id = kernel_state_->title_id();
+  content_data.xuid = 0;
+  content_data.set_file_name(file_name);
+
+  // Read display name from STFS metadata
+  auto display_name = device->header().metadata.display_name(rex::system::XLanguage::kEnglish);
+  if (!display_name.empty()) {
+    content_data.set_display_name(display_name);
+  } else {
+    content_data.set_display_name(rex::path_to_utf16(package_path.filename()));
+  }
+
+  auto install_path = ResolvePackagePath(0, content_data);
+
+  // Create destination directory
+  std::error_code ec;
+  std::filesystem::create_directories(install_path, ec);
+  if (ec) {
+    return X_ERROR_ACCESS_DENIED;
+  }
+
+  // Extract all files breadth-first
+  auto* root = device->ResolvePath("");
+  if (!root) {
+    return X_ERROR_ACCESS_DENIED;
+  }
+
+  std::queue<rex::filesystem::Entry*> queue;
+  queue.push(root);
+
+  while (!queue.empty()) {
+    auto* entry = queue.front();
+    queue.pop();
+
+    for (auto& child : entry->children()) {
+      queue.push(child.get());
+    }
+
+    auto result = ExtractEntry(entry, install_path);
+    if (result != X_ERROR_SUCCESS) {
+      return result;
+    }
+  }
+
+  // Compute license mask from STFS header licenses
+  uint32_t license_mask = 0;
+  for (size_t i = 0; i < 0x10; i++) {
+    if (device->header().header.licenses[i].license_flags) {
+      license_mask |= device->header().header.licenses[i].license_bits;
+    }
+  }
+
+  // Write .header file
+  return WriteContentHeaderFile(0, content_data, license_mask);
 }
 
 }  // namespace xam

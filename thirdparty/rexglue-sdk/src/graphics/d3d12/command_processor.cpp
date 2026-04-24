@@ -10,9 +10,11 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cstdarg>
 #include <cstring>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 #include <rex/assert.h>
@@ -50,6 +52,97 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 namespace rex::graphics::d3d12 {
+
+namespace {
+
+constexpr size_t kSuspiciousSpriteStateHistorySize = 16;
+
+struct SuspiciousSpriteStateWrite {
+  uint32_t reg_index = 0;
+  uint32_t value = 0;
+};
+
+std::array<SuspiciousSpriteStateWrite, kSuspiciousSpriteStateHistorySize>
+    g_suspicious_sprite_state_history;
+  uint32_t g_suspicious_sprite_state_history_count = 0;
+  size_t g_suspicious_sprite_state_history_pos = 0;
+
+bool IsSuspiciousSpriteStateRegister(uint32_t index) {
+  switch (index) {
+    case XE_GPU_REG_RB_MODECONTROL:
+    case XE_GPU_REG_RB_SURFACE_INFO:
+    case XE_GPU_REG_RB_COLORCONTROL:
+    case XE_GPU_REG_RB_COLOR_INFO:
+    case XE_GPU_REG_RB_COLOR_MASK:
+    case XE_GPU_REG_RB_BLENDCONTROL0:
+    case XE_GPU_REG_RB_DEPTHCONTROL:
+    case XE_GPU_REG_RB_DEPTH_INFO:
+    case XE_GPU_REG_PA_SU_POINT_SIZE:
+    case XE_GPU_REG_PA_SU_POINT_MINMAX:
+      return true;
+    default:
+      return false;
+  }
+}
+
+const char* GetSuspiciousSpriteStateRegisterName(uint32_t index) {
+  switch (index) {
+    case XE_GPU_REG_RB_MODECONTROL:
+      return "RB_MODECONTROL";
+    case XE_GPU_REG_RB_SURFACE_INFO:
+      return "RB_SURFACE_INFO";
+    case XE_GPU_REG_RB_COLORCONTROL:
+      return "RB_COLORCONTROL";
+    case XE_GPU_REG_RB_COLOR_INFO:
+      return "RB_COLOR_INFO0";
+    case XE_GPU_REG_RB_COLOR_MASK:
+      return "RB_COLOR_MASK";
+    case XE_GPU_REG_RB_BLENDCONTROL0:
+      return "RB_BLENDCONTROL0";
+    case XE_GPU_REG_RB_DEPTHCONTROL:
+      return "RB_DEPTHCONTROL";
+    case XE_GPU_REG_RB_DEPTH_INFO:
+      return "RB_DEPTH_INFO";
+    case XE_GPU_REG_PA_SU_POINT_SIZE:
+      return "PA_SU_POINT_SIZE";
+    case XE_GPU_REG_PA_SU_POINT_MINMAX:
+      return "PA_SU_POINT_MINMAX";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+void RecordSuspiciousSpriteStateWrite(uint32_t index, uint32_t value) {
+  if (!IsSuspiciousSpriteStateRegister(index)) {
+    return;
+  }
+  g_suspicious_sprite_state_history[g_suspicious_sprite_state_history_pos] = {index, value};
+  g_suspicious_sprite_state_history_pos =
+      (g_suspicious_sprite_state_history_pos + 1) % kSuspiciousSpriteStateHistorySize;
+  g_suspicious_sprite_state_history_count = std::min<uint32_t>(
+      g_suspicious_sprite_state_history_count + 1, kSuspiciousSpriteStateHistorySize);
+}
+
+std::string FormatSuspiciousSpriteStateHistory() {
+  std::ostringstream stream;
+  stream << "TrailStateHistory:";
+  if (!g_suspicious_sprite_state_history_count) {
+    stream << " <empty>";
+    return stream.str();
+  }
+  size_t start = (g_suspicious_sprite_state_history_pos + kSuspiciousSpriteStateHistorySize -
+                  g_suspicious_sprite_state_history_count) %
+                 kSuspiciousSpriteStateHistorySize;
+  stream << std::hex << std::uppercase;
+  for (uint32_t i = 0; i < g_suspicious_sprite_state_history_count; ++i) {
+    const SuspiciousSpriteStateWrite& write =
+        g_suspicious_sprite_state_history[(start + i) % kSuspiciousSpriteStateHistorySize];
+    stream << ' ' << GetSuspiciousSpriteStateRegisterName(write.reg_index) << "=0x" << write.value;
+  }
+  return stream.str();
+}
+
+}  // namespace
 
 // Generated with `xb buildshaders`.
 namespace shaders {
@@ -1847,6 +1940,7 @@ void D3D12CommandProcessor::ShutdownContext() {
 
 void D3D12CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   CommandProcessor::WriteRegister(index, value);
+  RecordSuspiciousSpriteStateWrite(index, value);
 
   if (index >= XE_GPU_REG_SHADER_CONSTANT_000_X && index <= XE_GPU_REG_SHADER_CONSTANT_511_W) {
     if (frame_open_) {
@@ -2579,6 +2673,124 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   uint32_t normalized_color_mask =
       pixel_shader ? draw_util::GetNormalizedColorMask(regs, pixel_shader->writes_color_targets())
                    : 0;
+  bool forced_ac6_trail_color_mask = false;
+  if (pixel_shader && !normalized_color_mask &&
+      primitive_processing_result.guest_primitive_type == xenos::PrimitiveType::kPointList &&
+      regs.Get<reg::RB_MODECONTROL>().edram_mode == xenos::EdramMode::kColorDepth &&
+      vertex_shader->ucode_data_hash() == UINT64_C(0xC049A8C9E556F129) &&
+      pixel_shader->ucode_data_hash() == UINT64_C(0x2E372EA28CC404B7)) {
+    xenos::ColorRenderTargetFormat color_format =
+        regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[0]).color_format;
+    uint32_t format_component_count =
+        xenos::GetColorRenderTargetFormatComponentCount(color_format);
+    if (format_component_count) {
+      uint32_t format_component_mask = (uint32_t(1) << format_component_count) - 1;
+      normalized_color_mask = format_component_mask | (uint32_t(0b1111) & ~format_component_mask);
+      forced_ac6_trail_color_mask = true;
+      static bool logged_forced_ac6_trail_color_mask = false;
+      if (!logged_forced_ac6_trail_color_mask) {
+        logged_forced_ac6_trail_color_mask = true;
+        REXGPU_WARN(
+            "Forcing RT0 color writes for AC6 trail point-list pass VS {:016X} / PS {:016X}",
+            vertex_shader->ucode_data_hash(), pixel_shader->ucode_data_hash());
+      }
+    }
+  }
+  bool trace_sprite_draw =
+      primitive_processing_result.guest_primitive_type == xenos::PrimitiveType::kPointList ||
+      primitive_processing_result.guest_primitive_type == xenos::PrimitiveType::kRectangleList ||
+      primitive_processing_result.host_primitive_type == xenos::PrimitiveType::kPointList ||
+      primitive_processing_result.host_primitive_type == xenos::PrimitiveType::kRectangleList;
+  if (trace_sprite_draw) {
+    uint64_t vertex_shader_hash = vertex_shader->ucode_data_hash();
+    uint64_t pixel_shader_hash = pixel_shader ? pixel_shader->ucode_data_hash() : 0;
+    auto pa_su_point_size = regs.Get<reg::PA_SU_POINT_SIZE>();
+    auto pa_su_point_minmax = regs.Get<reg::PA_SU_POINT_MINMAX>();
+    auto rb_modecontrol = regs.Get<reg::RB_MODECONTROL>();
+    auto sq_program_cntl = regs.Get<reg::SQ_PROGRAM_CNTL>();
+    auto sq_context_misc = regs.Get<reg::SQ_CONTEXT_MISC>();
+    auto rb_colorcontrol = regs.Get<reg::RB_COLORCONTROL>();
+    auto rt0_blendcontrol =
+        regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[0]);
+    uint32_t raw_rb_color_mask = regs[XE_GPU_REG_RB_COLOR_MASK];
+    uint32_t edram_mode = uint32_t(rb_modecontrol.edram_mode);
+    uint32_t sq_param_gen = sq_program_cntl.param_gen;
+    uint32_t sq_param_gen_pos = sq_context_misc.param_gen_pos;
+    uint32_t ps_param_gen_enable = pixel_shader_modification.pixel.param_gen_enable;
+    uint32_t ps_param_gen_interpolator =
+        pixel_shader_modification.pixel.param_gen_interpolator;
+    uint32_t ps_param_gen_point = pixel_shader_modification.pixel.param_gen_point;
+    uint32_t ps_writes_color_targets = pixel_shader ? pixel_shader->writes_color_targets() : 0;
+    uint32_t ps_writes_depth = pixel_shader ? pixel_shader->writes_depth() : 0;
+    uint32_t vs_output_point_size = vertex_shader_modification.vertex.output_point_size;
+    uint32_t alpha_test_enable = rb_colorcontrol.alpha_test_enable;
+    uint32_t alpha_to_mask_enable = rb_colorcontrol.alpha_to_mask_enable;
+    uint32_t depth_enable = normalized_depth_control.z_enable;
+    uint32_t depth_write_enable = normalized_depth_control.z_write_enable;
+    uint32_t point_width = pa_su_point_size.width;
+    uint32_t point_height = pa_su_point_size.height;
+    uint32_t point_min_size = pa_su_point_minmax.min_size;
+    uint32_t point_max_size = pa_su_point_minmax.max_size;
+    uint64_t trace_key = vertex_shader_hash;
+    trace_key ^= pixel_shader_hash * UINT64_C(0x9E3779B185EBCA87);
+    trace_key ^= uint64_t(primitive_processing_result.guest_primitive_type) << 1;
+    trace_key ^= uint64_t(primitive_processing_result.host_primitive_type) << 5;
+    trace_key ^= uint64_t(primitive_processing_result.host_vertex_shader_type) << 9;
+    trace_key ^= uint64_t(pa_su_point_size.value) << 32;
+    trace_key ^= uint64_t(pa_su_point_minmax.value);
+    trace_key ^= uint64_t(normalized_depth_control.value) << 16;
+    trace_key ^= uint64_t(raw_rb_color_mask) << 20;
+    trace_key ^= uint64_t(normalized_color_mask) << 48;
+    trace_key ^= uint64_t(rb_colorcontrol.value);
+    trace_key ^= uint64_t(ps_writes_color_targets) << 24;
+    trace_key ^= uint64_t(ps_writes_depth) << 28;
+    trace_key ^= uint64_t(edram_mode) << 60;
+    trace_key ^= uint64_t(ps_param_gen_enable) << 13;
+    trace_key ^= uint64_t(ps_param_gen_point) << 14;
+    trace_key ^= uint64_t(ps_param_gen_interpolator) << 15;
+    static std::unordered_set<uint64_t> logged_trace_keys;
+    if (logged_trace_keys.emplace(trace_key).second) {
+      REXGPU_INFO(
+          "SpriteTrace: guest_prim={} host_prim={} host_vs_type={} VS={:016X}/{}b "
+          "PS={:016X}/{}b interp_mask={:04X} ps_param_gen_pos={} sq_param_gen={} "
+          "sq_param_gen_pos={} ps_param_gen_enable={} ps_param_gen_interp={} "
+          "ps_param_gen_point={} vs_output_point_size={} vs_point_writes={} "
+          "point_size={}x{} point_minmax={}..{} rb_color_mask={:04X} "
+          "ps_writes_color_targets={:X} ps_writes_depth={} color_mask={:04X} "
+          "forced_color_mask={} "
+          "edram_mode={} alpha_test={} a2c={} z_enable={} z_write={} zfunc={} "
+          "rt0_blend=({},{},{},{},{},{})",
+          uint32_t(primitive_processing_result.guest_primitive_type),
+          uint32_t(primitive_processing_result.host_primitive_type),
+          uint32_t(primitive_processing_result.host_vertex_shader_type), vertex_shader_hash,
+          vertex_shader->ucode_dword_count() * sizeof(uint32_t), pixel_shader_hash,
+          pixel_shader ? (pixel_shader->ucode_dword_count() * sizeof(uint32_t)) : 0,
+          interpolator_mask, ps_param_gen_pos == UINT32_MAX ? -1 : int32_t(ps_param_gen_pos),
+          sq_param_gen, sq_param_gen_pos, ps_param_gen_enable, ps_param_gen_interpolator,
+          ps_param_gen_point, vs_output_point_size,
+          vertex_shader->writes_point_size_edge_flag_kill_vertex(), point_width, point_height,
+          point_min_size, point_max_size, raw_rb_color_mask, ps_writes_color_targets,
+          ps_writes_depth, normalized_color_mask, forced_ac6_trail_color_mask, edram_mode,
+          alpha_test_enable,
+          alpha_to_mask_enable, depth_enable,
+          depth_write_enable, uint32_t(normalized_depth_control.zfunc),
+          uint32_t(rt0_blendcontrol.color_srcblend),
+          uint32_t(rt0_blendcontrol.color_destblend),
+          uint32_t(rt0_blendcontrol.color_comb_fcn),
+          uint32_t(rt0_blendcontrol.alpha_srcblend),
+          uint32_t(rt0_blendcontrol.alpha_destblend),
+          uint32_t(rt0_blendcontrol.alpha_comb_fcn));
+    }
+    bool trace_trail_state_history =
+        raw_rb_color_mask == 0 &&
+        (vertex_shader_hash == UINT64_C(0xC049A8C9E556F129) ||
+         pixel_shader_hash == UINT64_C(0x2E372EA28CC404B7));
+    static std::unordered_set<uint64_t> logged_trace_state_history_keys;
+    if (trace_trail_state_history &&
+        logged_trace_state_history_keys.emplace(trace_key ^ UINT64_C(0xA5A5A5A5F00DFACE)).second) {
+      REXGPU_INFO("{}", FormatSuspiciousSpriteStateHistory());
+    }
+  }
   if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
                                     normalized_color_mask, *vertex_shader)) {
     return false;
@@ -2604,6 +2816,35 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
             bound_depth_and_color_render_target_formats);
   } else {
     bound_depth_and_color_render_target_bits = 0;
+    std::memset(bound_depth_and_color_render_target_formats, 0,
+                sizeof(bound_depth_and_color_render_target_formats));
+  }
+  if (trace_sprite_draw) {
+    uint64_t vertex_shader_hash = vertex_shader->ucode_data_hash();
+    uint64_t pixel_shader_hash = pixel_shader ? pixel_shader->ucode_data_hash() : 0;
+    uint64_t trace_rt_key = vertex_shader_hash;
+    trace_rt_key ^= pixel_shader_hash * UINT64_C(0xD6E8FEB86659FD93);
+    trace_rt_key ^= uint64_t(primitive_processing_result.guest_primitive_type) << 1;
+    trace_rt_key ^= uint64_t(primitive_processing_result.host_primitive_type) << 5;
+    trace_rt_key ^= uint64_t(normalized_depth_control.value) << 16;
+    trace_rt_key ^= uint64_t(normalized_color_mask) << 48;
+    trace_rt_key ^= uint64_t(bound_depth_and_color_render_target_bits) << 24;
+    for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
+      trace_rt_key ^=
+          uint64_t(bound_depth_and_color_render_target_formats[i]) << ((i * 11) & 63);
+    }
+    static std::unordered_set<uint64_t> logged_trace_rt_keys;
+    if (logged_trace_rt_keys.emplace(trace_rt_key).second) {
+      REXGPU_INFO(
+          "SpriteTraceRT: host_rt_path={} bound_bits={:02X} formats=[{:X},{:X},{:X},{:X},{:X}] "
+          "normalized_color_mask={:04X}",
+          uint32_t(render_target_cache_->GetPath()), bound_depth_and_color_render_target_bits,
+          bound_depth_and_color_render_target_formats[0],
+          bound_depth_and_color_render_target_formats[1],
+          bound_depth_and_color_render_target_formats[2],
+          bound_depth_and_color_render_target_formats[3],
+          bound_depth_and_color_render_target_formats[4], normalized_color_mask);
+    }
   }
   void* pipeline_handle;
   ID3D12RootSignature* root_signature;

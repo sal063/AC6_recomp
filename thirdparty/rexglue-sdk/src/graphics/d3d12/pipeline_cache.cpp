@@ -2013,12 +2013,8 @@ void PipelineCache::CreateDxbcGeometryShader(GeometryShaderKey key,
   // Names (after the parameters).
   name_ptr = uint32_t((shader_out.size() - osgn_position_dwords) * sizeof(uint32_t));
   uint32_t osgn_name_ptr_texcoord = name_ptr;
-  if (key.interpolator_count) {
+  if (key.interpolator_count || key.has_point_coordinates) {
     name_ptr += dxbc::AppendAlignedString(shader_out, "TEXCOORD");
-  }
-  uint32_t osgn_name_ptr_xespritetexcoord = name_ptr;
-  if (key.has_point_coordinates) {
-    name_ptr += dxbc::AppendAlignedString(shader_out, "XESPRITETEXCOORD");
   }
   uint32_t osgn_name_ptr_sv_position = name_ptr;
   name_ptr += dxbc::AppendAlignedString(shader_out, "SV_Position");
@@ -2059,13 +2055,15 @@ void PipelineCache::CreateDxbcGeometryShader(GeometryShaderKey key,
       }
     }
 
-    // Point coordinates (XESPRITETEXCOORD).
+    // Point coordinates use the next TEXCOORD semantic after guest interpolators
+    // so the DXBC->DXIL path doesn't depend on custom GS->PS semantic names.
     if (key.has_point_coordinates) {
       output_register_point_coordinates = output_register_index;
       assert_true(osgn_parameter_index < osgn_parameter_count);
       dxbc::SignatureParameterForGS& osgn_point_coordinates =
           osgn_parameters[osgn_parameter_index++];
-      osgn_point_coordinates.semantic_name_ptr = osgn_name_ptr_xespritetexcoord;
+      osgn_point_coordinates.semantic_name_ptr = osgn_name_ptr_texcoord;
+      osgn_point_coordinates.semantic_index = key.interpolator_count;
       osgn_point_coordinates.component_type = dxbc::SignatureRegisterComponentType::kFloat32;
       osgn_point_coordinates.register_index = output_register_index++;
       osgn_point_coordinates.mask = 0b0011;

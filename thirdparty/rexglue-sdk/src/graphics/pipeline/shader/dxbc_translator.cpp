@@ -2602,7 +2602,8 @@ void DxbcShaderTranslator::WriteInputSignature() {
       }
     }
 
-    // Point coordinates for PsParamGen (XESPRITETEXCOORD).
+    // Point coordinates for PsParamGen. Use the next TEXCOORD semantic after
+    // guest interpolators for better DXBC->DXIL linkage reliability on D3D12.
     size_t point_coordinates_position = shader_object_.size();
     if (in_reg_ps_point_coordinates_ != UINT32_MAX) {
       shader_object_.resize(shader_object_.size() + kParameterDwords);
@@ -2610,6 +2611,7 @@ void DxbcShaderTranslator::WriteInputSignature() {
       {
         auto& point_coordinates = *reinterpret_cast<dxbc::SignatureParameter*>(
             shader_object_.data() + point_coordinates_position);
+        point_coordinates.semantic_index = interpolator_count;
         point_coordinates.component_type = dxbc::SignatureRegisterComponentType::kFloat32;
         point_coordinates.register_index = in_reg_ps_point_coordinates_;
         point_coordinates.mask = 0b0011;
@@ -2665,19 +2667,18 @@ void DxbcShaderTranslator::WriteInputSignature() {
 
     // Semantic names.
     uint32_t semantic_offset = uint32_t((shader_object_.size() - blob_position) * sizeof(uint32_t));
-    if (interpolator_count) {
+    if (interpolator_count || in_reg_ps_point_coordinates_ != UINT32_MAX) {
       auto interpolators = reinterpret_cast<dxbc::SignatureParameter*>(shader_object_.data() +
                                                                        interpolator_position);
       for (uint32_t i = 0; i < interpolator_count; ++i) {
         interpolators[i].semantic_name_ptr = semantic_offset;
       }
+      if (in_reg_ps_point_coordinates_ != UINT32_MAX) {
+        auto& point_coordinates = *reinterpret_cast<dxbc::SignatureParameter*>(
+            shader_object_.data() + point_coordinates_position);
+        point_coordinates.semantic_name_ptr = semantic_offset;
+      }
       semantic_offset += dxbc::AppendAlignedString(shader_object_, "TEXCOORD");
-    }
-    if (in_reg_ps_point_coordinates_ != UINT32_MAX) {
-      auto& point_coordinates = *reinterpret_cast<dxbc::SignatureParameter*>(
-          shader_object_.data() + point_coordinates_position);
-      point_coordinates.semantic_name_ptr = semantic_offset;
-      semantic_offset += dxbc::AppendAlignedString(shader_object_, "XESPRITETEXCOORD");
     }
     {
       auto& position =

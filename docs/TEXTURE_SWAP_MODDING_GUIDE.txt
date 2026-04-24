@@ -184,11 +184,38 @@ wrong, or a higher-priority override is winning.
 What to do:
   - confirm the filename or manifest rule matches the dumped stable key
   - keep the same format, size, array/depth, and mip count
+  - for uncompressed replacements, prefer DX10 DDS with 8.8.8.8 RGBA
+  - for specular-style replacements, BC1 has been the most reliable format so far
+  - if you use a manifest, place it directly in override/textures or
+    mods/<mod_name>/textures and use [[swap]] entries with source paths
+    relative to that textures folder
   - test with override/textures first
 
 Problem: The wrong texture is replaced.
 Cause: A wildcard manifest rule is too broad.
 What to do: Narrow the stable_key_globs rule or switch to exact stable_keys.
+
+Problem: Auto reload works, but the result flips between skins or looks stale.
+Cause: Texture cache reuse is currently best-effort for hot reload, and AC6 can
+reuse texture layouts across appearances.
+What to do:
+  - treat full game restart as the reliable validation path
+  - use exact stable_keys before trying wildcard manifest rules
+  - if a result looks "50/50", verify with a cold launch before assuming the
+    dump or replacement is wrong
+
+Current AC6 authoring notes
+
+These are not hard engine guarantees, but they match the current round of AC6
+experiments:
+
+  - DX10 DDS plus 8.8.8.8 RGBA has been the safest choice for general texture
+    replacements
+  - BC1 has been the most reliable choice for specular replacements
+  - hangar and in-mission variants may not always use the same dumped texture,
+    even when the art looks related
+  - some captured textures may still need more investigation if the dump looks
+    incomplete or visibly corrupted
 
 Practical advice
 

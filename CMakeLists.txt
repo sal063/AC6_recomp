@@ -26,6 +26,7 @@ endif()
 # Sources
 set(AC6RECOMP_SOURCES
     src/main.cpp
+    src/ac6_pac_decode_dump.cpp
     src/d3d_hooks.cpp
     src/render_hooks.cpp
     src/ac6_texture_overrides.cpp

@@ -24,10 +24,11 @@
 #include <rex/ui/d3d12/d3d12_util.h>
 
 REXCVAR_DEFINE_BOOL(
-    d3d12_expand_point_sprites_in_vs, true, "GPU/D3D12",
-    "Expand Xbox point lists as triangle strips in the vertex shader instead of the host "
-    "point-list + geometry-shader path. Fixes missing trails/particles on some titles and "
-    "drivers where native point expansion is culled or rasterized incorrectly.")
+    d3d12_expand_point_sprites_in_vs, false, "GPU/D3D12",
+    "Experimental: expand Xbox point lists as triangle strips in the vertex shader instead of "
+    "the host point-list + geometry-shader path. Disabled by default on D3D12 because the DXBC "
+    "fallback path is not yet reliable enough for AC6 point-sprite effects such as missile "
+    "trails.")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex::graphics::d3d12 {
@@ -37,6 +38,9 @@ D3D12PrimitiveProcessor::~D3D12PrimitiveProcessor() {
 }
 
 bool D3D12PrimitiveProcessor::Initialize() {
+  // Keep the DXBC VS-expansion fallback opt-in for debugging, but prefer the
+  // native point-list + geometry-shader path by default until the D3D12
+  // translator matches the Vulkan point-sprite fallback behavior.
   const bool point_sprites_native_without_vs = !REXCVAR_GET(d3d12_expand_point_sprites_in_vs);
   if (!InitializeCommon(true, false, false, true, point_sprites_native_without_vs, true)) {
     Shutdown();

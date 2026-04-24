@@ -6,6 +6,9 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include <algorithm>
+#include <cctype>
+
 #include <native/filesystem/device.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
@@ -14,6 +17,7 @@
 #include <rex/ppc/types.h>
 #include <rex/system/info/file.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/thread_state.h>
 #include <rex/system/util/string_utils.h>
 #include <rex/system/xevent.h>
 #include <rex/system/xfile.h>
@@ -25,6 +29,36 @@
 
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
+
+namespace {
+
+bool AsciiCaseInsensitiveEquals(char left, char right) {
+  return std::tolower(static_cast<unsigned char>(left)) ==
+         std::tolower(static_cast<unsigned char>(right));
+}
+
+bool ContainsAsciiInsensitive(std::string_view haystack, std::string_view needle) {
+  return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+                     AsciiCaseInsensitiveEquals) != haystack.end();
+}
+
+bool IsFocusedAc6PacPath(std::string_view path) {
+  return ContainsAsciiInsensitive(path, "DATA00.PAC") ||
+         ContainsAsciiInsensitive(path, "DATA01.PAC") ||
+         ContainsAsciiInsensitive(path, "DATA.TBL");
+}
+
+uint32_t CurrentGuestCallerAddress() {
+  auto* thread_state = runtime::ThreadState::Get();
+  if (!thread_state || !thread_state->context()) {
+    return 0;
+  }
+
+  const uint32_t lr = static_cast<uint32_t>(thread_state->context()->lr);
+  return lr >= 4 ? (lr - 4) : 0;
+}
+
+}  // namespace
 
 struct CreateOptions {
   // https://processhacker.sourceforge.io/doc/ntioapi_8h.html
@@ -122,6 +156,14 @@ ppc_u32_result_t NtCreateFile_entry(ppc_pu32_t handle_out, ppc_u32_t desired_acc
       "NtCreateFile", "path={} access={:#x} attrs={:#x} share={:#x} disp={:#x} options={:#x}",
       target_path, (uint32_t)desired_access, (uint32_t)file_attributes, (uint32_t)share_access,
       (uint32_t)creation_disposition, (uint32_t)create_options);
+  if (IsFocusedAc6PacPath(target_path)) {
+    REXKRNL_INFO(
+        "[AC6 PAC] NtCreateFile caller={:08X} path={} access={:#x} attrs={:#x} share={:#x} "
+        "disp={:#x} options={:#x}",
+        CurrentGuestCallerAddress(), target_path, (uint32_t)desired_access,
+        (uint32_t)file_attributes, (uint32_t)share_access, (uint32_t)creation_disposition,
+        (uint32_t)create_options);
+  }
 
   // Enforce that the path is ASCII.
   if (!IsValidPath(target_path, false)) {
@@ -206,6 +248,16 @@ ppc_u32_result_t NtReadFile_entry(ppc_u32_t file_handle, ppc_u32_t event_handle,
     result = X_STATUS_INVALID_HANDLE;
   }
 
+  const bool focused_pac_read = file && IsFocusedAc6PacPath(file->path());
+  if (focused_pac_read) {
+    REXKRNL_INFO(
+        "[AC6 PAC] NtReadFile request caller={:08X} thid={} path={} handle={:#x} len={:#x} "
+        "offset={} sync={}",
+        CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
+        (uint32_t)file_handle, (uint32_t)buffer_length, byte_offset_ptr ? (int64_t)byte_offset : -1,
+        file->is_synchronous());
+  }
+
   if (XSUCCEEDED(result)) {
     uint32_t bytes_read = 0;
     result = file->Read(buffer.guest_address(), buffer_length,
@@ -239,6 +291,15 @@ ppc_u32_result_t NtReadFile_entry(ppc_u32_t file_handle, ppc_u32_t event_handle,
       result = X_STATUS_PENDING;
     }
     signal_event = true;
+
+    if (focused_pac_read) {
+      REXKRNL_INFO(
+          "[AC6 PAC] NtReadFile result caller={:08X} path={} status={:#x} bytes_read={:#x} "
+          "iosb_status={:#x} iosb_info={:#x}",
+          CurrentGuestCallerAddress(), file->path(), result, bytes_read,
+          io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
+          io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu);
+    }
   }
 
   if (XFAILED(result) && io_status_block) {
@@ -285,6 +346,17 @@ ppc_u32_result_t NtReadFileScatter_entry(ppc_u32_t file_handle, ppc_u32_t event_
     result = X_STATUS_INVALID_HANDLE;
   }
 
+  const bool focused_pac_read = file && IsFocusedAc6PacPath(file->path());
+  if (focused_pac_read) {
+    const uint64_t byte_offset = byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : 0;
+    REXKRNL_INFO(
+        "[AC6 PAC] NtReadFileScatter request caller={:08X} thid={} path={} handle={:#x} "
+        "len={:#x} offset={} sync={}",
+        CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
+        (uint32_t)file_handle, (uint32_t)length, byte_offset_ptr ? (int64_t)byte_offset : -1,
+        file->is_synchronous());
+  }
+
   if (XSUCCEEDED(result)) {
     uint32_t bytes_read = 0;
     result = file->ReadScatter(segment_array.guest_address(), length,
@@ -305,6 +377,15 @@ ppc_u32_result_t NtReadFileScatter_entry(ppc_u32_t file_handle, ppc_u32_t event_
       result = X_STATUS_PENDING;
     }
     signal_event = true;
+
+    if (focused_pac_read) {
+      REXKRNL_INFO(
+          "[AC6 PAC] NtReadFileScatter result caller={:08X} path={} status={:#x} bytes_read={:#x} "
+          "iosb_status={:#x} iosb_info={:#x}",
+          CurrentGuestCallerAddress(), file->path(), result, bytes_read,
+          io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
+          io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu);
+    }
   }
 
   if (XFAILED(result) && io_status_block) {

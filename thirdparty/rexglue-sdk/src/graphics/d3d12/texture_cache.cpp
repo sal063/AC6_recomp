@@ -14,7 +14,12 @@
 #include <cfloat>
 #include <cstddef>
 #include <cstring>
+#include <iomanip>
 #include <memory>
+#include <mutex>
+#include <sstream>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 
 #include <rex/assert.h>
@@ -36,6 +41,10 @@
 #include "../../../../../src/ac6_texture_overrides.h"
 
 namespace rex::graphics::d3d12 {
+
+REXCVAR_DEFINE_BOOL(d3d12_log_bc1_diagnostics, false, "GPU/D3D12",
+                    "Log detailed diagnostics for BC1 texture loads and dumps")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 // Generated with `xb buildshaders`.
 namespace shaders {
@@ -99,6 +108,9 @@ namespace {
 
 constexpr D3D12_FORMAT_SUPPORT1 kLinearFilterSupport = D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE;
 
+std::mutex g_bc1_diagnostic_mutex;
+std::unordered_set<std::string> g_bc1_diagnostic_logged_keys;
+
 bool IsFormatSampleFilterable(ID3D12Device* device, DXGI_FORMAT format) {
   if (format == DXGI_FORMAT_UNKNOWN) {
     return false;
@@ -110,6 +122,55 @@ bool IsFormatSampleFilterable(ID3D12Device* device, DXGI_FORMAT format) {
     return false;
   }
   return (support.Support1 & kLinearFilterSupport) == kLinearFilterSupport;
+}
+
+bool ShouldLogBc1Diagnostics(xenos::TextureFormat format, xenos::Endian endianness) {
+  return REXCVAR_GET(d3d12_log_bc1_diagnostics) &&
+         GetBaseFormat(format) == xenos::TextureFormat::k_DXT1 &&
+         endianness != xenos::Endian::kNone;
+}
+
+bool MarkBc1DiagnosticKeyLogged(std::string_view stable_key) {
+  std::lock_guard<std::mutex> lock(g_bc1_diagnostic_mutex);
+  return g_bc1_diagnostic_logged_keys.insert(std::string(stable_key)).second;
+}
+
+const char* GetEndianDebugName(xenos::Endian endianness) {
+  switch (endianness) {
+    case xenos::Endian::kNone:
+      return "kNone";
+    case xenos::Endian::k8in16:
+      return "k8in16";
+    case xenos::Endian::k8in32:
+      return "k8in32";
+    case xenos::Endian::k16in32:
+      return "k16in32";
+    default:
+      return "unknown";
+  }
+}
+
+const char* GetLoadShaderDebugName(uint32_t index) {
+  switch (index) {
+    case 3:
+      return "kLoadShaderIndex64bpb";
+    case 24:
+      return "kLoadShaderIndexDXT1ToRGBA8";
+    default:
+      return "other";
+  }
+}
+
+std::string FormatByteSample(const uint8_t* data, size_t count) {
+  std::ostringstream stream;
+  stream << std::hex << std::uppercase << std::setfill('0');
+  for (size_t i = 0; i < count; ++i) {
+    if (i != 0) {
+      stream << ' ';
+    }
+    stream << std::setw(2) << uint32_t(data[i]);
+  }
+  return stream.str();
 }
 
 }  // namespace
@@ -1849,6 +1910,35 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, 
     (is_base ? host_slice_size_base : host_slice_sizes_mips[level]) = level_host_slice_size;
     copy_buffer_size += level_host_slice_size * array_size;
   }
+  const bool log_bc1_diagnostics = ShouldLogBc1Diagnostics(guest_format, texture_key.endianness);
+  std::string bc1_diagnostic_stable_key;
+  if (log_bc1_diagnostics) {
+    const uint64_t texture_key_hash = XXH3_64bits(&texture_key, sizeof(texture_key));
+    bc1_diagnostic_stable_key = ac6::textures::BuildTextureStableKey(
+        texture_key_hash, texture_key.base_page, texture_key.mip_page, uint32_t(texture_key.dimension),
+        width, height, depth_or_array_size, texture_key.mip_max_level + 1, uint32_t(texture_key.format),
+        uint32_t(texture_key.endianness), texture_key.tiled != 0, texture_key.packed_mips != 0,
+        texture_key.signed_separate != 0, texture_key.scaled_resolve != 0);
+    if (MarkBc1DiagnosticKeyLogged(bc1_diagnostic_stable_key)) {
+      REXGPU_INFO(
+          "BC1 diagnostic {}: shader={} host_copy_format={} sample_format={} tiled={} packed={} "
+          "scaled={} endian={} base=0x{:08X} mip=0x{:08X} size={}x{}x{} mips={} "
+          "guest_base_row_pitch={} guest_base_z_rows={} guest_base_slice_stride=0x{:X} "
+          "guest_base_extent=0x{:X} guest_mips_extent=0x{:X} host_base_row_pitch={} "
+          "host_base_width={} host_base_height={} host_base_depth={} copy_buffer_size=0x{:X}",
+          bc1_diagnostic_stable_key, GetLoadShaderDebugName(load_shader),
+          ac6::textures::DescribeDxgiFormat(host_copy_format),
+          ac6::textures::DescribeDxgiFormat(host_sample_format), texture_key.tiled ? 1 : 0,
+          texture_key.packed_mips ? 1 : 0, texture_resolution_scaled ? 1 : 0,
+          GetEndianDebugName(texture_key.endianness), texture_key.base_page << 12, texture_key.mip_page << 12,
+          width, height, depth_or_array_size, texture_key.mip_max_level + 1, guest_layout.base.row_pitch_bytes,
+          guest_layout.base.z_slice_stride_block_rows, guest_layout.base.array_slice_stride_bytes,
+          guest_layout.base.level_data_extent_bytes, guest_layout.mips_total_extent_bytes,
+          host_slice_layout_base.Footprint.RowPitch, host_slice_layout_base.Footprint.Width,
+          host_slice_layout_base.Footprint.Height, host_slice_layout_base.Footprint.Depth,
+          uint32_t(copy_buffer_size));
+    }
+  }
   D3D12_RESOURCE_STATES copy_buffer_state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
   ID3D12Resource* copy_buffer =
       command_processor_.RequestScratchGPUBuffer(uint32_t(copy_buffer_size), copy_buffer_state);
@@ -2311,6 +2401,17 @@ void D3D12TextureCache::ProcessCompletedTextureTransfers() {
     if (build_failed) {
       it = pending_texture_dumps_.erase(it);
       continue;
+    }
+
+    if (ShouldLogBc1Diagnostics(xenos::TextureFormat(it->guest_format), xenos::Endian(it->endianness)) &&
+        !dds_image.subresources.empty() && !dds_image.subresources.front().data.empty()) {
+      const ac6::textures::DdsSubresource& subresource = dds_image.subresources.front();
+      const size_t sample_size = std::min<size_t>(subresource.data.size(), 8);
+      REXGPU_INFO(
+          "BC1 diagnostic {}: dump_format={} first_block={} row_pitch={} slice_pitch={} payload_size={}",
+          it->stable_key, ac6::textures::DescribeDxgiFormat(dds_image.format),
+          FormatByteSample(subresource.data.data(), sample_size), subresource.row_pitch,
+          subresource.slice_pitch, subresource.data.size());
     }
 
     ac6::textures::TextureDumpMetadata metadata;

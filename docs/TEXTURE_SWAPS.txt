@@ -102,6 +102,13 @@ First pass limitations:
   - cube textures are skipped
   - unsupported DXGI formats fall back to the original guest texture
 
+Current AC6 workflow notes:
+  - for uncompressed replacements, DX10 DDS with 8.8.8.8 RGBA has been the
+    safest authoring path
+  - for specular-style replacements, BC1 has been the most reliable format so far
+  - hot reload is useful for iteration, but a full game restart is still the
+    reliable check when cache reuse makes results look stale or mixed
+
 The fallback path is always the original guest texture load. A bad or missing
 replacement will not block rendering.
 

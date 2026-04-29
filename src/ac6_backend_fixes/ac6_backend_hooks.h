@@ -13,6 +13,7 @@
 
 REXCVAR_DECLARE(bool, ac6_backend_debug_swap);
 REXCVAR_DECLARE(bool, ac6_backend_log_signatures);
+REXCVAR_DECLARE(bool, ac6_backend_signature_diagnostics);
 
 namespace ac6 {
 struct FrameStats;

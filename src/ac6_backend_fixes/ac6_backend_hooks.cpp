@@ -12,6 +12,8 @@ REXCVAR_DEFINE_BOOL(ac6_backend_debug_swap, false, "AC6/Backend",
                     "Log AC6 swap-path diagnostics from the authoritative backend");
 REXCVAR_DEFINE_BOOL(ac6_backend_log_signatures, false, "AC6/Backend",
                     "Log AC6 capture signatures used for backend-fix routing");
+REXCVAR_DEFINE_BOOL(ac6_backend_signature_diagnostics, false, "AC6/Backend",
+                    "Track per-frame render signatures for diagnostics overlays and backend-fix research");
 
 namespace ac6::backend {
 namespace {
@@ -113,14 +115,21 @@ void AnalyzeFrameBoundary(
     g_snapshot.audio_callback_throttle_count = 0;
   }
 
-  g_snapshot.latest_signature = BuildRenderEventSignature(
-      frame_capture, capture_summary, shadow_state, swap_submission,
-      g_snapshot.active_vertex_shader_hash, g_snapshot.active_pixel_shader_hash);
-  g_snapshot.latest_signature.classification =
-      ClassifySignature(g_snapshot.latest_signature);
-  g_snapshot.latest_signature_tags = BuildSignatureTags(g_snapshot.latest_signature);
-  g_snapshot.repeated_signature_count =
-      ++g_signature_hits[g_snapshot.latest_signature.stable_id];
+  if (REXCVAR_GET(ac6_backend_signature_diagnostics) ||
+      REXCVAR_GET(ac6_backend_log_signatures)) {
+    g_snapshot.latest_signature = BuildRenderEventSignature(
+        frame_capture, capture_summary, shadow_state, swap_submission,
+        g_snapshot.active_vertex_shader_hash, g_snapshot.active_pixel_shader_hash);
+    g_snapshot.latest_signature.classification =
+        ClassifySignature(g_snapshot.latest_signature);
+    g_snapshot.latest_signature_tags = BuildSignatureTags(g_snapshot.latest_signature);
+    g_snapshot.repeated_signature_count =
+        ++g_signature_hits[g_snapshot.latest_signature.stable_id];
+  } else {
+    g_snapshot.latest_signature = {};
+    g_snapshot.latest_signature_tags.clear();
+    g_snapshot.repeated_signature_count = 0;
+  }
 
   if (ShouldLogSignature(g_snapshot)) {
     REXLOG_INFO(

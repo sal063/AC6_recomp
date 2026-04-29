@@ -21,7 +21,7 @@
 
 REXCVAR_DEFINE_BOOL(ac6_native_graphics_enabled, true, "AC6/NativeGraphics",
                     "Enable AC6 graphics capture analysis, overlay reporting, and backend fixes");
-REXCVAR_DEFINE_BOOL(ac6_native_graphics_require_capture, true, "AC6/NativeGraphics",
+REXCVAR_DEFINE_BOOL(ac6_native_graphics_require_capture, false, "AC6/NativeGraphics",
                     "Keep render capture enabled while AC6 graphics analysis is active");
 REXCVAR_DEFINE_BOOL(ac6_force_safe_render_capture, true, "AC6/NativeGraphics",
                     "Force AC6 hybrid backend fixes mode to keep per-draw render capture disabled until the capture path is stabilized");
@@ -423,10 +423,18 @@ void OnFrameBoundary(rex::memory::Memory* memory) {
   g_runtime_status.capture_summary = capture_summary;
   g_runtime_status.latest_capture_frame_index = capture_summary.frame_index;
   g_runtime_status.frontend_summary = g_capture_frontend.BuildFromCapture(frame_capture);
-  RefreshPassDiagnostics(g_capture_frontend.passes());
-  RefreshResolveDiagnostics(frame_capture);
-  g_runtime_status.frame_plan = g_capture_frame_planner.Build(
-      g_runtime_status.frontend_summary, g_capture_frontend.passes());
+  if (g_runtime_status.frontend_summary.capture_valid) {
+    RefreshPassDiagnostics(g_capture_frontend.passes());
+    RefreshResolveDiagnostics(frame_capture);
+    g_runtime_status.frame_plan = g_capture_frame_planner.Build(
+        g_runtime_status.frontend_summary, g_capture_frontend.passes());
+  } else {
+    g_runtime_status.pass_diagnostics_count = 0;
+    g_runtime_status.pass_diagnostics = {};
+    g_runtime_status.resolve_diagnostics_count = 0;
+    g_runtime_status.resolve_diagnostics = {};
+    g_runtime_status.frame_plan = {};
+  }
   if (capture_summary.draw_count || capture_summary.clear_count ||
       capture_summary.resolve_count) {
     g_runtime_status.last_meaningful_capture_frame_index = capture_summary.frame_index;

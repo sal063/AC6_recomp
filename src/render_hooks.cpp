@@ -2,8 +2,8 @@
 #include "d3d_hooks.h"
 #include "ac6_native_graphics.h"
 
+#include <atomic>
 #include <chrono>
-#include <mutex>
 
 #include <rex/cvar.h>
 #include <rex/system/kernel_state.h>
@@ -16,10 +16,9 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
-std::mutex g_frame_mutex;
-double g_frame_time_ms{0.0};
-double g_fps{0.0};
-uint64_t g_frame_count{0};
+std::atomic<double> g_frame_time_ms{0.0};
+std::atomic<double> g_fps{0.0};
+std::atomic<uint64_t> g_frame_count{0};
 Clock::time_point g_frame_start{};
 
 bool AreTimingHooksActive() {
@@ -48,31 +47,26 @@ void ac6DeltaDivisorHook(PPCRegister& r29) {
 }
 
 void ac6PresentTimingHook(PPCRegister& /*r31*/) {
-    static uint64_t last_log = 0;
-    if (g_frame_count % 60 == 0 && g_frame_count != last_log) {
-        REXLOG_INFO("ac6PresentTimingHook firing: frame={}", g_frame_count);
-        last_log = g_frame_count;
-    }
     // ac6::d3d::OnFrameBoundary(); // MOVED TO GPU THREAD
 
     const auto now = Clock::now();
-    {
-        std::lock_guard<std::mutex> lock(g_frame_mutex);
-        if (g_frame_start.time_since_epoch().count() != 0) {
-            g_frame_time_ms =
-                std::chrono::duration<double, std::milli>(now - g_frame_start).count();
-            g_fps = g_frame_time_ms > 0.0001 ? (1000.0 / g_frame_time_ms) : 0.0;
-            ++g_frame_count;
-        }
-        g_frame_start = now;
+    if (g_frame_start.time_since_epoch().count() != 0) {
+        const double frame_time_ms =
+            std::chrono::duration<double, std::milli>(now - g_frame_start).count();
+        g_frame_time_ms.store(frame_time_ms, std::memory_order_relaxed);
+        g_fps.store(frame_time_ms > 0.0001 ? (1000.0 / frame_time_ms) : 0.0,
+                    std::memory_order_relaxed);
+        g_frame_count.fetch_add(1, std::memory_order_relaxed);
     }
+    g_frame_start = now;
 }
 
 namespace ac6 {
 
 FrameStats GetFrameStats() {
-    std::lock_guard<std::mutex> lock(g_frame_mutex);
-    return FrameStats{g_frame_time_ms, g_fps, g_frame_count};
+    return FrameStats{g_frame_time_ms.load(std::memory_order_relaxed),
+                      g_fps.load(std::memory_order_relaxed),
+                      g_frame_count.load(std::memory_order_relaxed)};
 }
 
 }  // namespace ac6

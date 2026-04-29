@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <shared_mutex>
+#include <unordered_set>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -194,7 +195,8 @@ ac6::d3d::FrameCaptureSummary MakeFrameCaptureSummary(
     if (summary.capture_enabled && !frame_capture.draws.empty()) {
         constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ull;
         uint64_t signature = kFnvOffsetBasis;
-        std::vector<uint32_t> unique_rt0s;
+        std::unordered_set<uint32_t> unique_rt0s;
+        unique_rt0s.reserve(std::min<size_t>(frame_capture.draws.size(), 128));
         uint32_t previous_rt0 = frame_capture.draws.front().shadow_state.render_targets[0];
         for (const auto& draw : frame_capture.draws) {
             switch (draw.kind) {
@@ -210,9 +212,7 @@ ac6::d3d::FrameCaptureSummary MakeFrameCaptureSummary(
             }
             IncrementTopologyHistogram(summary, draw.primitive_type);
             uint32_t rt0 = draw.shadow_state.render_targets[0];
-            if (std::find(unique_rt0s.begin(), unique_rt0s.end(), rt0) == unique_rt0s.end()) {
-                unique_rt0s.push_back(rt0);
-            }
+            unique_rt0s.insert(rt0);
             if (rt0 != previous_rt0) {
                 ++summary.rt0_switch_count;
                 previous_rt0 = rt0;
@@ -787,12 +787,28 @@ PPC_FUNC_IMPL(rex_sub_821E10C8) {
 namespace ac6::d3d {
 
 void OnFrameBoundary() {
-    REXLOG_INFO("d3d::OnFrameBoundary: frame_index={}", g_capture_live_frame_index);
     ac6::d3d::DrawStatsSnapshot draw_stats = SnapshotDrawStats();
 
     std::unique_lock<std::shared_mutex> lock(g_snapshot_mutex);
     g_snapshot = draw_stats;
     lock.unlock();
+
+    if (!REXCVAR_GET(ac6_render_capture)) {
+        std::unique_lock<std::shared_mutex> capture_lock(g_capture_mutex);
+        g_capture_summary = {};
+        g_capture_summary.capture_enabled = false;
+        g_capture_summary.frame_index = g_capture_live_frame_index++;
+        g_capture_summary.frame_stats = draw_stats;
+        g_capture_snapshot = {};
+        g_capture_snapshot.frame_index = g_capture_summary.frame_index;
+        g_capture_snapshot.stats = draw_stats;
+        g_capture_live_sequence = 0;
+        g_live_draws.clear();
+        g_live_clears.clear();
+        g_live_resolves.clear();
+        g_live_stats.Reset();
+        return;
+    }
 
     ac6::d3d::FrameCaptureSnapshot frame_capture;
     frame_capture.stats = draw_stats;

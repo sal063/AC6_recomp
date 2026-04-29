@@ -9,6 +9,9 @@ project(ac6recomp LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(CheckIPOSupported)
+check_ipo_supported(RESULT AC6RECOMP_IPO_SUPPORTED OUTPUT AC6RECOMP_IPO_ERROR)
+
 # Keep reconfigure passes pinned to the vendored SDK when the cache is empty.
 if(NOT DEFINED REXSDK_DIR OR REXSDK_DIR STREQUAL "")
     set(_ac6_vendored_rexsdk "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk")
@@ -60,3 +63,16 @@ else()
 endif()
 
 rexglue_setup_target(ac6recomp)
+
+if(AC6RECOMP_IPO_SUPPORTED)
+    set_property(TARGET ac6recomp PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    set_property(TARGET ac6recomp PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+else()
+    message(STATUS "IPO/LTO disabled for ac6recomp: ${AC6RECOMP_IPO_ERROR}")
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(ac6recomp PRIVATE
+        $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:-fomit-frame-pointer>
+    )
+endif()

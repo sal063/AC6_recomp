@@ -2105,7 +2105,7 @@ bool D3D12CommandProcessor::IssueSwapInternal(uint32_t frontbuffer_ptr,
   bool using_native_swap_texture = false;
   bool used_direct_display_fallback = false;
 
-  ID3D12Resource* swap_texture_resource = ac6::graphics::GetNativeOutputTexture();
+  ID3D12Resource* swap_texture_resource = nullptr;
   if (swap_texture_resource) {
     D3D12_RESOURCE_DESC native_desc = swap_texture_resource->GetDesc();
     swap_texture_srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;

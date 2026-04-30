@@ -38,22 +38,6 @@ set(AC6RECOMP_SOURCES
     src/ac6_backend_fixes/ac6_backend_capture_bridge.cpp
     src/ac6_backend_fixes/ac6_backend_hooks.cpp
     src/ac6_backend_fixes/ac6_backend_pass_classifier.cpp
-    src/ac6_native_renderer/ac6_render_frontend.cpp
-    src/ac6_native_renderer/execution_plan.cpp
-    src/ac6_native_renderer/frame_plan.cpp
-    src/ac6_native_renderer/replay_ir.cpp
-    src/ac6_native_renderer/replay_executor.cpp
-    src/ac6_native_renderer/backends/backend_factory.cpp
-    src/ac6_native_renderer/backends/d3d12_backend.cpp
-    src/ac6_native_renderer/backends/d3d12_resource_manager.cpp
-    src/ac6_native_renderer/backends/d3d12_resource_tracker.cpp
-    src/ac6_native_renderer/backends/d3d12_shader_manager.cpp
-    src/ac6_native_renderer/backends/metal_backend.cpp
-    src/ac6_native_renderer/backends/vulkan_backend.cpp
-    src/ac6_native_renderer/frame_scheduler.cpp
-    src/ac6_native_renderer/native_renderer.cpp
-    src/ac6_native_renderer/render_device.cpp
-    src/ac6_native_renderer/render_graph.cpp
 )
 
 if(WIN32)

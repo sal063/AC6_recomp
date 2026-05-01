@@ -1,0 +1,219 @@
+================================================================================
+AC6 Asset Extraction Walkthrough
+================================================================================
+
+Goal: go from a fresh clone of this repository to decoded AC6 asset files
+(textures, FHM containers, SWG metadata) on disk.
+
+The recompiled binary patches the guest decompressor at runtime via a midasm
+hook (see docs/ac6_extraction_roadmap.md). When the env var
+AC6_DUMP_PAC_DECODED=1 is set, every PAC entry the game touches is written
+to disk in already-decoded form. The asset pipeline then turns those raw
+buffers into typed FHM children, NTXR textures, etc.
+
+
+--------------------------------------------------------------------------------
+0. Prerequisites
+--------------------------------------------------------------------------------
+
+- Windows 10/11 x64. (Linux clang-20 also works; commands below assume Windows.)
+- Visual Studio 2022 with the "Desktop development with C++" workload installed,
+  OR a standalone clang-cl/MSVC toolchain.
+- LLVM/Clang 20+ on PATH (the project pins clang for codegen).
+- CMake 3.25 or newer, Ninja, and Python 3.11+ (for the asset pipeline tools).
+- Your own legally obtained copy of Ace Combat 6: Fires of Liberation. The
+  repository ships no game data.
+
+
+--------------------------------------------------------------------------------
+1. First-time build
+--------------------------------------------------------------------------------
+
+Open a 64-bit shell (x64 Native Tools Command Prompt for VS 2022, or any shell
+with the right toolchain on PATH). From the repo root, run:
+
+    cmake --preset win-amd64-relwithdebinfo
+    cmake --build --preset win-amd64-relwithdebinfo --target ac6recomp_codegen
+    cmake --preset win-amd64-relwithdebinfo
+    cmake --build --preset win-amd64-relwithdebinfo
+
+The two-phase configure is required because the codegen target produces
+sources that the second configure has to pick up. Output exe lands at:
+
+    out/build/win-amd64-relwithdebinfo/ac6recomp.exe
+
+setup_and_build.bat wraps the same sequence if you would rather run it once.
+
+
+--------------------------------------------------------------------------------
+2. Place the game assets
+--------------------------------------------------------------------------------
+
+The game expects DATA.TBL, DATA00.PAC, and DATA01.PAC alongside the exe in an
+"assets" subfolder:
+
+    out/build/win-amd64-relwithdebinfo/assets/DATA.TBL
+    out/build/win-amd64-relwithdebinfo/assets/DATA00.PAC
+    out/build/win-amd64-relwithdebinfo/assets/DATA01.PAC
+
+You will also need a default.xex and any other files the game requires; consult
+the project README for the full layout. Without the PAC archives the dumper
+has nothing to capture.
+
+
+--------------------------------------------------------------------------------
+3. Run the game with PAC dumping enabled
+--------------------------------------------------------------------------------
+
+Use the helper launcher from PowerShell at the repo root:
+
+    .\tools\launch_ac6_with_pac_dump.ps1
+
+That sets AC6_DUMP_PAC_DECODED=1 and starts ac6recomp.exe with the working
+directory pointing at the build output.
+
+Optional switches (only set these when you need them):
+
+    .\tools\launch_ac6_with_pac_dump.ps1 -TraceWorkItems
+        Lifts the [fs] log category to info so the dumper's
+        "[AC6 PAC] dumped decoded entry ..." lines appear in ac6recomp.log,
+        and enables the PAC stream-worker dispatch probes.
+
+    .\tools\launch_ac6_with_pac_dump.ps1 -TraceStacks
+        Adds PPC back-chain stack=[...] traces on each PAC NtReadFile call.
+        Useful for debugging the stream worker; not needed for routine runs.
+
+Play long enough for the streamer to load the assets you care about. As a
+rough guide:
+- Title screen + intro: enough for the boot/menu PACs.
+- One mission start: enough for that mission's PAC entries.
+- Anything new the game streams in adds new dumps; replays do not duplicate
+  entries that have already been written.
+
+When you are done, close the game window normally.
+
+
+--------------------------------------------------------------------------------
+4. Verify the decoded dumps
+--------------------------------------------------------------------------------
+
+The dumper writes to (relative to the repo root):
+
+    out/ac6_pac_runtime_dump/
+
+A successful run looks like:
+
+    entry_<tag>_mode0_c<csize>_u<usize>_off<hex>.bin     <- raw entries
+    entry_<tag>_mode1_c<csize>_u<usize>_off<hex>.bin     <- decoded entries
+
+You should NOT see any .compressed.bin files. If you do, the midasm hook at
+0x821CCC5C did not fire for those entries (see Troubleshooting below).
+
+Quick sanity check on a decoded blob:
+
+    powershell -Command "(Get-Content out\ac6_pac_runtime_dump\<file>.bin -Encoding Byte -TotalCount 4) -join ','"
+
+The first 4 bytes of any mode-1 dump should be 70,72,77,32 (ASCII "FHM ").
+
+
+--------------------------------------------------------------------------------
+5. Run the asset extraction pipeline
+--------------------------------------------------------------------------------
+
+From the repo root, with the dumps in place:
+
+    python tools\run_ac6_asset_pipeline.py
+
+The driver runs four stages in order:
+
+    1. extract_ac6_pac.py
+       Pulls the raw 126 entries directly out of DATA00/01.PAC offline.
+       Outputs to out/ac6_pac_extracted_raw/.
+
+    2. extract_ac6_runtime_fhm.py
+       Walks every entry_*_mode*.bin in out/ac6_pac_runtime_dump/ and
+       descends into FHM containers, writing typed children to
+       out/ac6_runtime_fhm_typed/.
+
+    3. parse_ac6_swg.py
+       Parses the UI sprite/widget metadata (.swg children) into
+       out/ac6_runtime_swg_parsed/.
+
+    4. export_ac6_ntxr.py
+       Converts NTXR texture entries into DDS/TGA in
+       out/ac6_runtime_ntxr_exported/.
+
+Override any output path with --raw-out, --typed-out, --swg-out, --ntxr-out.
+Add --skip-pac-extract if you only want to re-process the runtime dumps.
+
+
+--------------------------------------------------------------------------------
+6. Where the output lives
+--------------------------------------------------------------------------------
+
+    out/ac6_pac_runtime_dump/         Raw decoded buffers, one file per entry.
+    out/ac6_pac_extracted_raw/        126 raw (mode-0) entries pulled offline.
+    out/ac6_runtime_fhm_typed/        FHM children classified by magic
+                                      (NTXR textures, BFX/BSN audio banks,
+                                       MDLP/NSXR models, SWG UI, etc.).
+    out/ac6_runtime_swg_parsed/       JSON metadata for UI sprites.
+    out/ac6_runtime_ntxr_exported/    DDS/TGA files (one per texture entry).
+
+
+--------------------------------------------------------------------------------
+7. Troubleshooting
+--------------------------------------------------------------------------------
+
+* "no entry_*_mode1_*.bin files appeared"
+    - The game did not stream any compressed entries during the session.
+      Boot further or load a mission and try again.
+    - AC6_DUMP_PAC_DECODED was not set. Always launch via the helper script,
+      or set the env var manually before starting the exe.
+
+* ".compressed.bin files appeared"
+    - The midasm hook at 0x821CCC5C did not fire. Codegen may have shifted
+      the underlying instruction sequence. Verify the anchor instruction in
+      generated/ac6recomp_recomp.10.cpp:
+
+          // lwz r11,-18100(r26)
+          // add r11,r9,r11
+          // addi r3,r10,8     <- PC of this instruction is the hook address
+
+      If the surrounding ops differ, re-anchor by finding the unique
+      "lwz r11,-18100(r26)" sequence and updating the address in
+      ac6recomp_config.toml under [[midasm_hook]] name = "ac6PacDecoderDumpHook".
+
+* "logs do not show any [AC6 PAC] lines"
+    - ac6_performance_mode is on by default and forces log_level=error,
+      which silences the [fs] category. Run with -TraceWorkItems to lift
+      [fs] to info. Note: dumps still land in out/ac6_pac_runtime_dump/
+      regardless of log level.
+
+* "extract_ac6_runtime_fhm.py reports 0 containers"
+    - The dump dir is empty or the files are still .compressed.bin.
+      Re-run with the hook fix above.
+
+* "log files rotate and the early dumper lines are gone"
+    - At trace-level logging the rotating buffer fills in seconds. Do not
+      raise log_level globally; the per-category lift in -TraceWorkItems
+      keeps volume manageable.
+
+* "I changed ac6recomp_config.toml and the new hook does nothing"
+    - You skipped the codegen pass. TOML changes only take effect after:
+
+          cmake --build --preset win-amd64-relwithdebinfo --target ac6recomp_codegen
+          cmake --build --preset win-amd64-relwithdebinfo
+
+
+--------------------------------------------------------------------------------
+8. Quick reference: env vars
+--------------------------------------------------------------------------------
+
+    AC6_DUMP_PAC_DECODED=1        Required. Enables the dumper sink.
+    AC6_TRACE_PAC_WORK_ITEMS=1    Optional. Lifts [fs] log category to info,
+                                  enables L1/L2 streamer-worker probes.
+    AC6_TRACE_PAC_STACKS=1        Optional. PPC back-chain on PAC NtReadFile.
+
+The launcher script (.\tools\launch_ac6_with_pac_dump.ps1) sets the first
+unconditionally and the others only when -TraceWorkItems / -TraceStacks
+are passed.

@@ -7,12 +7,17 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdlib>
+#include <iomanip>
+#include <sstream>
 
 #include <native/filesystem/device.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
 #include <rex/memory.h>
+#include <rex/memory/utils.h>
 #include <rex/ppc/function.h>
 #include <rex/ppc/types.h>
 #include <rex/system/info/file.h>
@@ -26,6 +31,10 @@
 #include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 #include <rex/thread/mutex.h>
+
+// AC6-specific PAC dump hook. Defined in src/ac6_pac_decode_dump.cpp.
+extern void Ac6OnPacReadCompleted(std::string_view path, uint32_t guest_buffer,
+                                  uint64_t file_offset, uint32_t bytes_read);
 
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
@@ -56,6 +65,81 @@ uint32_t CurrentGuestCallerAddress() {
 
   const uint32_t lr = static_cast<uint32_t>(thread_state->context()->lr);
   return lr >= 4 ? (lr - 4) : 0;
+}
+
+bool ReadGuestU32BE(uint32_t guest_address, uint32_t* out_value) {
+  if (!out_value || guest_address > UINT32_MAX - sizeof(uint32_t)) {
+    return false;
+  }
+
+  auto* memory = REX_KERNEL_MEMORY();
+  if (!memory || !memory->LookupHeap(guest_address) ||
+      !memory->LookupHeap(guest_address + sizeof(uint32_t) - 1)) {
+    return false;
+  }
+
+  const void* host = memory->TranslateVirtual(guest_address);
+  *out_value = rex::memory::load_and_swap<uint32_t>(host);
+  return true;
+}
+
+std::string CurrentGuestStackTrace() {
+  auto* thread_state = runtime::ThreadState::Get();
+  auto* context = thread_state ? thread_state->context() : nullptr;
+  if (!context) {
+    return "[]";
+  }
+
+  std::array<uint32_t, 12> callers{};
+  size_t count = 0;
+
+  const uint32_t current_lr = static_cast<uint32_t>(context->lr);
+  if (current_lr >= 4) {
+    callers[count++] = current_lr - 4;
+  }
+
+  uint32_t frame = context->r1.u32;
+  for (size_t depth = 0; depth < callers.size() - count && frame != 0; ++depth) {
+    uint32_t next_frame = 0;
+    uint32_t saved_lr = 0;
+    if (!ReadGuestU32BE(frame, &next_frame) || !ReadGuestU32BE(frame + 8, &saved_lr)) {
+      break;
+    }
+    if (saved_lr >= 4) {
+      callers[count++] = saved_lr - 4;
+    }
+    if (next_frame == 0 || next_frame <= frame) {
+      break;
+    }
+    frame = next_frame;
+  }
+
+  std::ostringstream text;
+  text << '[' << std::uppercase << std::hex << std::setfill('0');
+  for (size_t i = 0; i < count; ++i) {
+    if (i) {
+      text << ", ";
+    }
+    text << std::setw(8) << callers[i];
+  }
+  text << ']';
+  return text.str();
+}
+
+bool Ac6PacStackTraceEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("AC6_TRACE_PAC_STACKS");
+    return value && value[0] && std::string_view(value) != "0";
+  }();
+  return enabled;
+}
+
+bool Ac6PacDumpingEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("AC6_DUMP_PAC_DECODED");
+    return value && value[0] && std::string_view(value) != "0";
+  }();
+  return enabled;
 }
 
 }  // namespace
@@ -250,12 +334,22 @@ ppc_u32_result_t NtReadFile_entry(ppc_u32_t file_handle, ppc_u32_t event_handle,
 
   const bool focused_pac_read = file && IsFocusedAc6PacPath(file->path());
   if (focused_pac_read) {
-    REXKRNL_INFO(
-        "[AC6 PAC] NtReadFile request caller={:08X} thid={} path={} handle={:#x} len={:#x} "
-        "offset={} sync={}",
-        CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
-        (uint32_t)file_handle, (uint32_t)buffer_length, byte_offset_ptr ? (int64_t)byte_offset : -1,
-        file->is_synchronous());
+    if (Ac6PacStackTraceEnabled()) {
+      REXKRNL_INFO(
+          "[AC6 PAC] NtReadFile request caller={:08X} thid={} path={} handle={:#x} len={:#x} "
+          "offset={} sync={} stack={}",
+          CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
+          (uint32_t)file_handle, (uint32_t)buffer_length,
+          byte_offset_ptr ? (int64_t)byte_offset : -1, file->is_synchronous(),
+          CurrentGuestStackTrace());
+    } else {
+      REXKRNL_INFO(
+          "[AC6 PAC] NtReadFile request caller={:08X} thid={} path={} handle={:#x} len={:#x} "
+          "offset={} sync={}",
+          CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
+          (uint32_t)file_handle, (uint32_t)buffer_length,
+          byte_offset_ptr ? (int64_t)byte_offset : -1, file->is_synchronous());
+    }
   }
 
   if (XSUCCEEDED(result)) {
@@ -293,12 +387,31 @@ ppc_u32_result_t NtReadFile_entry(ppc_u32_t file_handle, ppc_u32_t event_handle,
     signal_event = true;
 
     if (focused_pac_read) {
-      REXKRNL_INFO(
-          "[AC6 PAC] NtReadFile result caller={:08X} path={} status={:#x} bytes_read={:#x} "
-          "iosb_status={:#x} iosb_info={:#x}",
-          CurrentGuestCallerAddress(), file->path(), result, bytes_read,
-          io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
-          io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu);
+      if (Ac6PacStackTraceEnabled()) {
+        REXKRNL_INFO(
+            "[AC6 PAC] NtReadFile result caller={:08X} path={} status={:#x} bytes_read={:#x} "
+            "iosb_status={:#x} iosb_info={:#x} stack={}",
+            CurrentGuestCallerAddress(), file->path(), result, bytes_read,
+            io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
+            io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu,
+            CurrentGuestStackTrace());
+      } else {
+        REXKRNL_INFO(
+            "[AC6 PAC] NtReadFile result caller={:08X} path={} status={:#x} bytes_read={:#x} "
+            "iosb_status={:#x} iosb_info={:#x}",
+            CurrentGuestCallerAddress(), file->path(), result, bytes_read,
+            io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
+            io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu);
+      }
+
+      const bool read_ok = io_status_block ? XSUCCEEDED(io_status_block->status)
+                                           : XSUCCEEDED(result);
+      if (read_ok && bytes_read > 0 && Ac6PacDumpingEnabled()) {
+        const uint64_t resolved_offset =
+            byte_offset_ptr ? static_cast<uint64_t>(byte_offset)
+                            : (file->position() >= bytes_read ? file->position() - bytes_read : 0);
+        Ac6OnPacReadCompleted(file->path(), buffer.guest_address(), resolved_offset, bytes_read);
+      }
     }
   }
 
@@ -349,12 +462,21 @@ ppc_u32_result_t NtReadFileScatter_entry(ppc_u32_t file_handle, ppc_u32_t event_
   const bool focused_pac_read = file && IsFocusedAc6PacPath(file->path());
   if (focused_pac_read) {
     const uint64_t byte_offset = byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : 0;
-    REXKRNL_INFO(
-        "[AC6 PAC] NtReadFileScatter request caller={:08X} thid={} path={} handle={:#x} "
-        "len={:#x} offset={} sync={}",
-        CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
-        (uint32_t)file_handle, (uint32_t)length, byte_offset_ptr ? (int64_t)byte_offset : -1,
-        file->is_synchronous());
+    if (Ac6PacStackTraceEnabled()) {
+      REXKRNL_INFO(
+          "[AC6 PAC] NtReadFileScatter request caller={:08X} thid={} path={} handle={:#x} "
+          "len={:#x} offset={} sync={} stack={}",
+          CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
+          (uint32_t)file_handle, (uint32_t)length, byte_offset_ptr ? (int64_t)byte_offset : -1,
+          file->is_synchronous(), CurrentGuestStackTrace());
+    } else {
+      REXKRNL_INFO(
+          "[AC6 PAC] NtReadFileScatter request caller={:08X} thid={} path={} handle={:#x} "
+          "len={:#x} offset={} sync={}",
+          CurrentGuestCallerAddress(), XThread::GetCurrentThreadId(), file->path(),
+          (uint32_t)file_handle, (uint32_t)length, byte_offset_ptr ? (int64_t)byte_offset : -1,
+          file->is_synchronous());
+    }
   }
 
   if (XSUCCEEDED(result)) {
@@ -379,12 +501,22 @@ ppc_u32_result_t NtReadFileScatter_entry(ppc_u32_t file_handle, ppc_u32_t event_
     signal_event = true;
 
     if (focused_pac_read) {
-      REXKRNL_INFO(
-          "[AC6 PAC] NtReadFileScatter result caller={:08X} path={} status={:#x} bytes_read={:#x} "
-          "iosb_status={:#x} iosb_info={:#x}",
-          CurrentGuestCallerAddress(), file->path(), result, bytes_read,
-          io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
-          io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu);
+      if (Ac6PacStackTraceEnabled()) {
+        REXKRNL_INFO(
+            "[AC6 PAC] NtReadFileScatter result caller={:08X} path={} status={:#x} "
+            "bytes_read={:#x} iosb_status={:#x} iosb_info={:#x} stack={}",
+            CurrentGuestCallerAddress(), file->path(), result, bytes_read,
+            io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
+            io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu,
+            CurrentGuestStackTrace());
+      } else {
+        REXKRNL_INFO(
+            "[AC6 PAC] NtReadFileScatter result caller={:08X} path={} status={:#x} "
+            "bytes_read={:#x} iosb_status={:#x} iosb_info={:#x}",
+            CurrentGuestCallerAddress(), file->path(), result, bytes_read,
+            io_status_block ? (uint32_t)io_status_block->status : 0xFFFFFFFFu,
+            io_status_block ? (uint32_t)io_status_block->information : 0xFFFFFFFFu);
+      }
     }
   }
 

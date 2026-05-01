@@ -30,6 +30,8 @@ endif()
 set(AC6RECOMP_SOURCES
     src/main.cpp
     src/ac6_pac_decode_dump.cpp
+    src/ac6_pac_decoder_probe.cpp
+    src/ac6_pac_index.cpp
     src/d3d_hooks.cpp
     src/render_hooks.cpp
     src/ac6_texture_overrides.cpp
@@ -47,6 +49,9 @@ else()
 endif()
 
 rexglue_setup_target(ac6recomp)
+
+# Link libmspack for AC6 PAC LZX decompression in the runtime dump path.
+target_link_libraries(ac6recomp PRIVATE mspack)
 
 if(AC6RECOMP_IPO_SUPPORTED)
     set_property(TARGET ac6recomp PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)

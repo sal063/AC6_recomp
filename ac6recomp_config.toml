@@ -10609,3 +10609,64 @@ address = 0x821EFF30
 name = "ac6PresentIntervalHook"
 registers = ["r10"]
 jump_address_on_true = 0x821EFF74
+
+# AC6 PAC stream-worker dispatch probe.
+#
+# rex_sub_82343E18 is the PAC streamer's queue pump. At 0x82343E78 it issues a
+# `bctrl` to dispatch the next queued work item; r28 holds the work item and
+# ctr holds the function pointer about to run. We intercept here to enumerate
+# every distinct work-item virtual the worker invokes, which is what we need
+# in order to identify the AC6 "mode 1" guest decoder. Gated at runtime by
+# `AC6_TRACE_PAC_WORK_ITEMS=1`; otherwise the hook is a fast no-op.
+[[midasm_hook]]
+address = 0x82343E78
+name = "ac6PacWorkerDispatchHook"
+registers = ["r28", "ctr"]
+
+# AC6 PAC stream-worker second-level dispatch probes.
+#
+# Each of the five non-error worker state handlers (rex_sub_82345608, _738,
+# _860, _A00, _B28) calls a different vtable slot on a streaming sub-class
+# (slots 16, 20, 24, 32, 36 respectively). The mode-1 decoder is reached
+# through one of those slots. Hook each handler's first `bctrl` so we can
+# capture the target function each slot resolves to. Cross-referencing those
+# targets with `[AC6 PAC] compressed entry written` lines pins the decoder.
+[[midasm_hook]]
+address = 0x82345660  # in rex_sub_82345608, vtable[16]
+name = "ac6PacWorkerL2DispatchHook"
+registers = ["r3", "r4", "r5", "r6", "ctr"]
+
+[[midasm_hook]]
+address = 0x82345780  # in rex_sub_82345738, vtable[20]
+name = "ac6PacWorkerL2DispatchHook"
+registers = ["r3", "r4", "r5", "r6", "ctr"]
+
+[[midasm_hook]]
+address = 0x823458C4  # in rex_sub_82345860, vtable[24]
+name = "ac6PacWorkerL2DispatchHook"
+registers = ["r3", "r4", "r5", "r6", "ctr"]
+
+[[midasm_hook]]
+address = 0x82345A50  # in rex_sub_82345A00, vtable[32]
+name = "ac6PacWorkerL2DispatchHook"
+registers = ["r3", "r4", "r5", "r6", "ctr"]
+
+[[midasm_hook]]
+address = 0x82345B70  # in rex_sub_82345B28, vtable[36]
+name = "ac6PacWorkerL2DispatchHook"
+registers = ["r3", "r4", "r5", "r6", "ctr"]
+
+# AC6 mode-1 decoder post-decode dump hook.
+#
+# Fires immediately after `add r11,r9,r11` resolves the compress-table entry
+# record pointer in the streamer's per-entry processing function (PC of the
+# next instruction `addi r3,r10,8`). At this site `bl 0x822CF510` has just
+# finished decompressing the entry into the buffer at r4's guest VA, so we
+# can read the entry record (codec_mode at +1, csize at +8, usize at +12),
+# the source offset at *(r31+22888), and dump the decoded bytes via
+# Ac6DumpPacDecodedEntry. This re-introduces the decoder hook from the Apr 23
+# build whose source-tree call site was lost.
+[[midasm_hook]]
+address = 0x821CCC5C
+name = "ac6PacDecoderDumpHook"
+registers = ["r4", "r10", "r11", "r31"]

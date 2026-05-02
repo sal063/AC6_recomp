@@ -1,0 +1,299 @@
+================================================================================
+AC6 AUDIO EXTRACTION WALKTHROUGH
+================================================================================
+
+This walkthrough takes you from a fresh AC6_recomp checkout to playable .wav
+files for every track of music, every voiceline, and every cutscene mix in
+Ace Combat 6. It also explains why in-game sound effects (engines, missile
+lock, explosions, weapons) are NOT covered yet, and what would be required to
+extract them.
+
+If you've never extracted assets from this repo before, do the texture
+walkthrough first (docs/ac6_asset_extraction_walkthrough.txt). It gets the
+runtime PAC dumps populated, which this walkthrough also benefits from.
+
+
+================================================================================
+0. WHAT YOU GET
+================================================================================
+
+After running this walkthrough you will have, in
+out/ac6_runtime_audio/packs/ :
+
+    bgmpack__00000_off00000000.xma     (47 BGM tracks; one .xma each)
+    bgmpack__00001_off01450000.xma
+    ...
+    voicepack_eng__00000_off00000000.xma   (7523 voicelines, English)
+    ...
+    voicepack_jpn__00000_off00000000.xma   (7523 voicelines, Japanese)
+    ...
+    demopack_eng__00000_off00000000.xma    (31 cutscene mixes)
+    ...
+
+If vgmstream is installed, each .xma also has a sibling .wav next to it.
+
+You will ALSO have, in out/ac6_runtime_audio/, the runtime-captured FHM
+RIFFs (currently 42 voice/event clips from the dumps you've already
+collected).
+
+You will NOT yet have:
+
+  - In-game SFX (engines, weapons, lock-on, explosions). See section 6.
+  - Cutscene video. moviepack.bin is standard ASF/WMV — see section 5.
+
+
+================================================================================
+1. PREREQUISITES
+================================================================================
+
+  - The repo is built and ac6recomp.exe runs (texture walkthrough covers this).
+  - Python 3.10+ on PATH.
+  - Asset directory exists at:
+      out/build/win-amd64-relwithdebinfo/assets/
+    containing bgmpack.bin, voicepack_eng.bin, voicepack_jpn.bin,
+    demopack_eng.bin, demopack_jpn.bin, moviepack.bin.
+  - (Optional, for .wav decoding) vgmstream-cli.exe.
+    Download "vgmstream-win64-cli.zip" from https://vgmstream.org/downloads
+    and extract anywhere — e.g. C:\tools\vgmstream\.
+
+
+================================================================================
+2. THE QUICK PATH
+================================================================================
+
+From the repo root:
+
+    python tools/export_ac6_audio.py --packs ^
+        --vgmstream "C:/tools/vgmstream/vgmstream-cli.exe"
+
+That's it. Output:
+
+    out/ac6_runtime_audio/                  (FHM-channel RIFFs as .xma + .wav)
+    out/ac6_runtime_audio/packs/            (pack-channel streams as .xma + .wav)
+
+Without vgmstream installed, omit --vgmstream and you'll get .xma files
+only — no .wav. The .xma files are still the actual audio, just in the
+Xbox 360 codec; any vgmstream-aware player (foobar2000 + vgmstream
+plugin, vgmstream-cli later, etc.) will play them.
+
+
+================================================================================
+3. WHAT THE TOOL DOES, IN DETAIL
+================================================================================
+
+AC6 ships audio in two structurally different shapes. The exporter handles
+each one differently.
+
+----------------------------------------------------------------------------
+3a) Standalone "pack" files in the asset directory
+----------------------------------------------------------------------------
+
+bgmpack.bin / voicepack_*.bin / demopack_*.bin are flat concatenations of
+independent RIFF/WAVE streams, each aligned to a 0x800-byte sector.
+
+Layout per pack:
+
+    +-------------------+  offset 0
+    | RIFF <size> WAVE  |  ----+
+    | fmt / x2st / data |      | sub-stream 0 = 8 + declared_size bytes
+    +-------------------+  ----+
+    | (zero padding)    |      | aligned up to 0x800
+    +-------------------+
+    | RIFF <size> WAVE  |
+    | ...               |  sub-stream 1
+    +-------------------+
+    ...
+
+The splitter reads the declared RIFF size at offset 4, copies
+8 + declared_size bytes to its own .xma file, then advances to the next
+sector boundary and looks for another RIFF. The codec inside is XMA2 for
+bgmpack and XMA1 for voicepack/demopack — both decoded fine by vgmstream.
+
+----------------------------------------------------------------------------
+3b) FHM-embedded RIFF entries
+----------------------------------------------------------------------------
+
+When AC6 runtime-decompresses a PAC entry containing audio, the FHM
+extractor (tools/extract_ac6_runtime_fhm.py) writes each audio child
+as <NNN>_RIFF.bin. Those have the Project Aces RIFF/WAVE quirks:
+
+  - The RIFF size field is set to file_size, NOT file_size - 8. The tool
+    patches this on export.
+  - The fmt chunk uses wFormatTag = 0x0165 (XMA1) but actually carries
+    XMA2 streams (an "x2st" chunk follows). Decoders that key off
+    wFormatTag alone will misread channels/sample rate; vgmstream knows
+    to look at x2st.
+
+The current corpus only has 42 RIFF entries, all from idx_0214 and
+idx_0227 — these are voice/event clips. Adding more requires either
+playing more of the game with AC6_DUMP_PAC_DECODED=1 or implementing the
+offline mode-1 decompressor (see section 6).
+
+
+================================================================================
+4. COMMAND REFERENCE
+================================================================================
+
+Default (FHM corpus only, decode if vgmstream is on PATH):
+
+    python tools/export_ac6_audio.py
+
+FHM corpus + asset packs:
+
+    python tools/export_ac6_audio.py --packs
+
+Asset packs only, skip FHM corpus:
+
+    python tools/export_ac6_audio.py --packs-only
+
+Dry-run (list what would be exported, write nothing):
+
+    python tools/export_ac6_audio.py --packs --dry-run
+
+Skip the vgmstream decode step (write .xma only):
+
+    python tools/export_ac6_audio.py --packs --no-decode
+
+Point at a specific vgmstream binary:
+
+    python tools/export_ac6_audio.py --packs ^
+        --vgmstream "C:/tools/vgmstream/vgmstream-cli.exe"
+
+Custom asset directory (if your build output is elsewhere):
+
+    python tools/export_ac6_audio.py --packs ^
+        --assets "D:/games/AC6/assets"
+
+
+================================================================================
+5. CUTSCENE VIDEO (moviepack.bin)
+================================================================================
+
+moviepack.bin starts with the ASF GUID 30 26 B2 75 8E 66 CF 11 — it's a
+standard Microsoft ASF container with WMV9 video and WMA audio inside.
+Use ffmpeg directly (not vgmstream, not this tool):
+
+    ffmpeg -i moviepack.bin -map 0 -c copy out/movies/all.wmv
+
+Or to remux into mp4 (re-encodes audio):
+
+    ffmpeg -i moviepack.bin -c:v copy -c:a aac out/movies/all.mp4
+
+The ASF object index identifies individual cutscenes; ffmpeg's segment
+muxer can split them, but moviepack also tends to be a single concatenated
+ASF, in which case ffmpeg will emit one file. Use ffprobe to inspect.
+
+
+================================================================================
+6. THE MISSING SFX, AND WHAT IT TAKES TO GET THEM
+================================================================================
+
+If you extract everything above and play the .wavs, you'll hear: music,
+dialogue, cutscene mixes. You will NOT hear: jet engines, missile lock
+warnings, gun fire, explosions, ECM bursts, ground impacts, cockpit
+warnings. Those live in a third channel that the current pipeline cannot
+yet open.
+
+Why:
+
+  - There is no sfxpack.bin. Look at the asset directory and you'll see
+    bgmpack / voicepack / demopack / moviepack — and that's it for audio.
+  - SFX waveforms are inside DATA00.PAC / DATA01.PAC, packed as RIFF/XMA
+    entries inside FHM containers like the voice clips above.
+  - Those FHM containers are mode-1 compressed. The runtime mode-1 hook
+    (see ac6_extraction_roadmap.md) decompresses entries as the game
+    requests them. Anything the game hasn't requested in your sessions
+    so far is still sitting in DATA*.PAC compressed.
+  - The cue tables that name the SFX are present already — idx_0000/
+    001_BSN_.bsn (sound bank), idx_0000/00{2,3,4}_BFX_.bfx (effects),
+    idx_0001/000_nusc.bin (Namco cue table) — but they only contain
+    pointers. The waveform data they point to is in the un-decompressed
+    SFX banks.
+
+Two ways forward:
+
+(a) Capture more at runtime.
+    Set AC6_DUMP_PAC_DECODED=1 and play missions with combat. The
+    SFX-bearing PAC entries will get decompressed by the game and
+    written to out/ac6_pac_runtime_dump/ as new entry_*_mode1_*.bin
+    files. Then re-run:
+
+        python tools/run_ac6_asset_pipeline.py --skip-pac-extract
+        python tools/export_ac6_audio.py --packs
+
+    New idx_<N> directories under out/ac6_runtime_fhm_typed/ should
+    contain new RIFF entries.
+
+(b) Finish the offline mode-1 decompressor.
+    docs/ac6_extraction_roadmap.md "Path B" — port the guest mode-1
+    decoder to Python so every compressed PAC entry can be materialized
+    without launching the game. This is the only way to guarantee all
+    SFX are extracted, regardless of what mission state you've reached.
+
+The recommended near-term option is (a). For a complete archive (b) is
+the right answer.
+
+
+================================================================================
+7. TROUBLESHOOTING
+================================================================================
+
+"found 0 RIFF entries"
+    Your FHM corpus is empty. Run the asset pipeline first:
+        python tools/run_ac6_asset_pipeline.py
+    If that produces no output either, you don't yet have any runtime
+    dumps — see ac6_asset_extraction_walkthrough.txt.
+
+"assets dir not found"
+    Pass --assets pointing at the directory that contains bgmpack.bin
+    etc. The default assumes a standard build at
+    out/build/win-amd64-relwithdebinfo/assets/.
+
+"vgmstream-cli not on PATH; writing .xma only"
+    Not an error — the .xma files are valid. Install vgmstream
+    (https://vgmstream.org/downloads) or pass --vgmstream <path> and
+    re-run. vgmstream is also available as a foobar2000 plugin if you
+    just want to listen, not convert.
+
+"truncated stream at 0x... ; stopping"
+    The pack walker found a RIFF whose declared size runs past the end
+    of the file. Usually means the pack file is partial / damaged.
+    Verify the file size against your install media.
+
+vgmstream decode fails with "unknown format"
+    Confirm the .xma file starts with 'RIFF' and that bytes 8..12 are
+    'WAVE'. If they aren't, the splitter mis-stepped and the file is
+    junk. Try running with --no-decode and inspect the output bytes.
+
+The .wav plays as silence / noise
+    For the 42 FHM-channel clips: if vgmstream warns about the format
+    tag, that's the 0x0165-but-actually-XMA2 quirk. vgmstream handles
+    it correctly when an x2st chunk is present. If you patched the
+    file by hand and removed x2st, restore from out/ac6_runtime_fhm_typed
+    and re-run the exporter.
+
+
+================================================================================
+8. WHERE THINGS LIVE
+================================================================================
+
+Inputs:
+    out/build/win-amd64-relwithdebinfo/assets/bgmpack.bin
+    out/build/win-amd64-relwithdebinfo/assets/voicepack_*.bin
+    out/build/win-amd64-relwithdebinfo/assets/demopack_*.bin
+    out/build/win-amd64-relwithdebinfo/assets/moviepack.bin
+    out/ac6_runtime_fhm_typed/idx_*/                (FHM-channel RIFFs)
+
+Outputs:
+    out/ac6_runtime_audio/                          (FHM-channel .xma/.wav)
+    out/ac6_runtime_audio/packs/                    (pack-channel .xma/.wav)
+
+Tools:
+    tools/export_ac6_audio.py                       (this walkthrough's tool)
+    tools/extract_ac6_runtime_fhm.py                (FHM extractor)
+    tools/run_ac6_asset_pipeline.py                 (orchestrator)
+
+Reference:
+    docs/ac6_extraction_roadmap.md                  ("Audio extraction"
+                                                     section, channel 1/2/3)
+    docs/ac6_asset_pipeline.md                      (overall pipeline)

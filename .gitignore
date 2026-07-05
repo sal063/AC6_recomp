@@ -44,3 +44,8 @@ tmp_*.py
 build_*.txt
 *.log
 New Text Document.txt
+
+# Local executables and configs
+ac6recomp.exe
+ac6recomp.toml
+extract-xiso.exe

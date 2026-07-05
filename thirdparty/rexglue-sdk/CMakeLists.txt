@@ -103,6 +103,9 @@ add_compile_options(
     $<$<CONFIG:RELEASE>:-DNDEBUG>
     -fno-char8_t
 )
+if(MSVC)
+    add_compile_options(/arch:AVX2)
+endif()
 
 # Platform detection (supports AMD64 and ARM64)
 if(WIN32)

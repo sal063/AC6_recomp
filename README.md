@@ -31,6 +31,19 @@ Users must supply their own legally obtained game files locally.
 
 ## Build
 
+### Option A: Automatic Setup (Recommended)
+You can use the automated build script which handles environment setup, ISO extraction, and the multi-step CMake build:
+1. Place your legally obtained **Ace Combat 6 ISO** in the repository root directory.
+2. Run `setup_and_build.bat`. The script will automatically locate Visual Studio, extract the assets, run codegen, and build the runtime using the MSVC backend.
+3. Once completed, copy the compiled executable and default config to the root directory to run:
+   ```powershell
+   Copy-Item out/build/win-amd64-relwithdebinfo/ac6recomp.exe . -Force
+   Copy-Item out/build/win-amd64-relwithdebinfo/ac6recomp.toml . -Force
+   ```
+4. Run `ac6recomp.exe` directly from the root directory.
+5. Optionally create a shortcut to the executable file.
+
+### Option B: Manual Build
 ```bash
 cmake --preset win-amd64-relwithdebinfo
 cmake --build --preset win-amd64-relwithdebinfo --target ac6recomp_codegen
@@ -41,6 +54,25 @@ cmake --build --preset win-amd64-relwithdebinfo
 The executable is placed at `out/build/win-amd64-relwithdebinfo/ac6recomp.exe`.
 
 On Windows, use the preset commands above rather than plain `cmake -L` in the repo root. If you previously configured from an `x86` Visual Studio prompt or with the wrong compiler on `PATH`, delete `out/build/win-amd64-relwithdebinfo` and re-run the preset from a normal 64-bit PowerShell/CMD window or an x64 Native Tools prompt.
+
+## Recommended Configuration Tweaks
+
+Create or modify `ac6recomp.toml` in your out or root directory with these settings to optimize your gameplay experience:
+
+```toml
+# Play in Fullscreen
+fullscreen = true
+
+# (Forces point lists to expand to triangle strips in the VS, bypassing deprecated GPU point-sprite limits)
+d3d12_expand_point_sprites_in_vs = true
+
+# Eliminate Microstutters
+# (Decouples presentation from UI event loop thread and enables G-Sync/FreeSync VRR tearing support)
+host_present_from_non_ui_thread = true
+d3d12_allow_variable_refresh_rate_and_tearing = true
+d3d12_low_latency_swap_chain = true
+d3d12_max_frame_latency = 1
+```
 
 ## Modding Docs
 

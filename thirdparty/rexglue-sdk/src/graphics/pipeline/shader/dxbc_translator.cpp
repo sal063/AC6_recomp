@@ -18,6 +18,8 @@
 
 #include <rex/assert.h>
 #include <rex/cvar.h>
+#include <rex/graphics/flags.h>
+#include <rex/logging.h>
 #include <rex/graphics/pipeline/shader/dxbc.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
 #include <rex/graphics/xenos.h>
@@ -27,6 +29,10 @@
 REXCVAR_DEFINE_BOOL(dxbc_switch, true, "GPU/Shader", "Use switch statements in DXBC");
 
 REXCVAR_DEFINE_BOOL(dxbc_source_map, false, "GPU/Shader", "Generate source maps for DXBC");
+
+// Defined in graphics/flags.cpp; read by param_gen below.
+REXCVAR_DECLARE(bool, param_gen_integer_guest_position);
+REXCVAR_DECLARE(bool, param_gen_host_subpixel_restore);
 
 namespace rex::graphics {
 using namespace ucode;
@@ -668,6 +674,22 @@ void DxbcShaderTranslator::StartPixelShader() {
       a_.OpMul(dxbc::Dest::R(param_gen_temp, resolution_scaled_axes), dxbc::Src::R(param_gen_temp),
                dxbc::Src::LF(1.0f / draw_resolution_scale_x_, 1.0f / draw_resolution_scale_y_, 1.0f,
                              1.0f));
+      if (REXCVAR_GET(param_gen_integer_guest_position) ||
+          REXCVAR_GET(param_gen_host_subpixel_restore)) {
+        // Snap the reverted position to the integer guest-pixel index. The
+        // multiply above leaves a sub-guest-pixel fraction (e.g. .5 at 2x) which
+        // is correct only for shaders that feed PsParamGen straight to tfetch.
+        // (param_gen_host_subpixel_restore re-adds that sub-pixel later, at the
+        // texture fetch, so the restore passes regain full host resolution.)
+        // Games that instead do integer pixel-address math on the position (AC6's
+        // deferred EDRAM restore/de-swizzle passes) break, because their
+        // frac()-based bit extraction sees a doubled period at >1x and scrambles
+        // the sample coordinate into an 8x8 mosaic. Flooring here makes that math
+        // operate on integer guest pixels again, at the cost of those passes
+        // sampling at guest resolution.
+        a_.OpRoundNI(dxbc::Dest::R(param_gen_temp, resolution_scaled_axes),
+                     dxbc::Src::R(param_gen_temp));
+      }
     }
     if (shader_modification.pixel.param_gen_point) {
       // A point - always front-facing (the upper bit of X is 0), not a line
@@ -1008,6 +1030,35 @@ void DxbcShaderTranslator::CompleteVertexOrDomainShader() {
                 dxbc::Src::LF(std::nanf("")),
                 dxbc::Src::R(system_temp_position_, dxbc::Src::kWWWW));
     }
+  }
+
+  // AC6 sun-flare "square" fix - drop the flare's second billboard
+  // This VS (ADF9AFC4C10921B9) emits two billboards per flare draw: V0-V3 =
+  // the visible glow quad, V4-V7 = a huge malformed quad (corners far
+  // off-screen, garbage UVs) that is invisible on real hardware but
+  // mis-renders in the emulator as a faint bright-edged rectangle. Cull it
+  // the same way as kill-vertex above: NaN the output position of vertices
+  // with index >= the threshold so the rasterizer discards the primitive.
+  // V0-V3 (the real glow) are untouched.
+  if (REXCVAR_GET(ac6_flare_drop_quad2) &&
+      current_shader().ucode_data_hash() == 0xADF9AFC4C10921B9ull &&
+      GetDxbcShaderModification().vertex.host_vertex_shader_type ==
+          Shader::HostVertexShaderType::kVertex) {
+    int32_t ac6_drop_index_min = REXCVAR_GET(ac6_flare_drop_index_min);
+    if (ac6_drop_index_min < 0) {
+      ac6_drop_index_min = 0;
+    }
+    uint32_t ac6_drop_temp = PushSystemTemp();
+    // ac6_drop_temp.x = (SV_VertexID >= index_min) ? 0xFFFFFFFF : 0
+    a_.OpUGE(dxbc::Dest::R(ac6_drop_temp, 0b0001),
+             dxbc::Src::V1D(kInRegisterVSVertexIndex, dxbc::Src::kXXXX),
+             dxbc::Src::LU(uint32_t(ac6_drop_index_min)));
+    // NaN the whole position of culled vertices.
+    a_.OpMovC(dxbc::Dest::R(system_temp_position_, 0b1111),
+              dxbc::Src::R(ac6_drop_temp, dxbc::Src::kXXXX),
+              dxbc::Src::LF(std::nanf("")), dxbc::Src::R(system_temp_position_));
+    // Release ac6_drop_temp.
+    PopSystemTemp();
   }
 
   // Write the position to the output.

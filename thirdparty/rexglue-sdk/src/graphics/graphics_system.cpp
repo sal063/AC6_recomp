@@ -200,7 +200,8 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
   vsync_worker_running_ = true;
   vsync_worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state_, 128 * 1024, 0, [this, vsync_interval_ticks,
-                                                               no_vsync_interval_ticks]() {
+                                                               no_vsync_interval_ticks,
+                                                               guest_tick_frequency]() {
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
         while (vsync_worker_running_) {
           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
@@ -208,6 +209,17 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
                                         ? vsync_interval_ticks
                                         : (REXCVAR_GET(vsync) ? vsync_interval_ticks
                                                               : no_vsync_interval_ticks);
+          double vblank_hz_override = GetGuestVblankHzOverride();
+          if (vblank_hz_override > 0.0) {
+            interval_ticks = std::max(
+                uint64_t(1), uint64_t(double(guest_tick_frequency) / vblank_hz_override));
+          }
+          // Re-anchor when far behind so a shrinking interval (an override
+          // switching from a paced rate to a much faster one) or a long stall
+          // does not burst a backlog of MarkVblank calls in one wake.
+          if (current_time - last_frame_time >= interval_ticks * 4) {
+            last_frame_time = current_time - interval_ticks;
+          }
           while (current_time - last_frame_time >= interval_ticks) {
             MarkVblank();
             last_frame_time += interval_ticks;
@@ -397,6 +409,18 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
   uint64_t args[] = {source, interrupt_callback_data_};
   function_dispatcher_->ExecuteInterrupt(thread->thread_state(), interrupt_callback_, args,
                                          rex::countof(args));
+}
+
+namespace {
+std::atomic<double> g_guest_vblank_hz_override{0.0};
+}  // namespace
+
+void GraphicsSystem::SetGuestVblankHzOverride(double hz) {
+  g_guest_vblank_hz_override.store(hz, std::memory_order_relaxed);
+}
+
+double GraphicsSystem::GetGuestVblankHzOverride() {
+  return g_guest_vblank_hz_override.load(std::memory_order_relaxed);
 }
 
 void GraphicsSystem::MarkVblank() {

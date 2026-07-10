@@ -29,12 +29,19 @@ REXCVAR_DECLARE(int32_t, draw_resolution_scale_x);
 REXCVAR_DECLARE(int32_t, draw_resolution_scale_y);
 REXCVAR_DECLARE(bool, resolve_resolution_scale_fill_half_pixel_offset);
 REXCVAR_DECLARE(bool, draw_resolution_scaled_texture_offsets);
+REXCVAR_DECLARE(bool, param_gen_integer_guest_position);
+REXCVAR_DECLARE(bool, param_gen_host_subpixel_restore);
+REXCVAR_DECLARE(std::string, ac6_neutralize_deswizzle_hashes);
 REXCVAR_DECLARE(std::string, readback_resolve);
 REXCVAR_DECLARE(bool, readback_resolve_half_pixel_offset);
 REXCVAR_DECLARE(bool, readback_memexport);
 REXCVAR_DECLARE(bool, readback_memexport_fast);
 REXCVAR_DECLARE(bool, occlusion_query_enable);
 REXCVAR_DECLARE(int32_t, query_occlusion_fake_sample_count);
+
+// AC6 sun-flare "square" fix (drop the flare's spurious second billboard)
+REXCVAR_DECLARE(bool, ac6_flare_drop_quad2);
+REXCVAR_DECLARE(int32_t, ac6_flare_drop_index_min);
 
 // GPU Depth / Render Target Behavior
 REXCVAR_DECLARE(bool, depth_float24_round);
@@ -113,5 +120,8 @@ REXCVAR_DECLARE(std::string, render_target_path_d3d12);
 // Legacy backend compatibility aliases for shared readback controls.
 REXCVAR_DECLARE(bool, d3d12_readback_memexport);
 REXCVAR_DECLARE(bool, d3d12_readback_resolve);
+
+// AC6 game-specific fixes
+REXCVAR_DECLARE(bool, ac6_fix_trails);
 
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1

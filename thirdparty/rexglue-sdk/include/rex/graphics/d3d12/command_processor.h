@@ -437,6 +437,12 @@ class D3D12CommandProcessor : public CommandProcessor {
   void InvalidateAllVertexBufferResidency();
   void InvalidateVertexBufferResidency(uint32_t vfetch_index);
   void InvalidateVertexBufferResidencyRange(uint32_t first_vfetch, uint32_t last_vfetch);
+  // Registered with the memory system: flags that a CPU write invalidated
+  // watched GPU-visible memory, so the cached vertex buffer states must be
+  // dropped before the next draw (otherwise fixed-address buffers never
+  // re-request their ranges and their GPU copies go permanently stale).
+  static std::pair<uint32_t, uint32_t> VertexBufferMemoryInvalidationCallbackThunk(
+      void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range);
 
   void WriteGammaRampSRV(bool is_pwl, D3D12_CPU_DESCRIPTOR_HANDLE handle) const;
 
@@ -687,6 +693,8 @@ class D3D12CommandProcessor : public CommandProcessor {
   };
   std::array<VertexBufferState, 96> vertex_buffer_states_{};
   uint64_t vertex_buffers_in_sync_[2] = {};
+  std::atomic<bool> vertex_buffer_memory_invalidated_{false};
+  void* vertex_buffer_memory_invalidation_callback_handle_ = nullptr;
 
   std::atomic<bool> pix_capture_requested_ = false;
   bool pix_capturing_;

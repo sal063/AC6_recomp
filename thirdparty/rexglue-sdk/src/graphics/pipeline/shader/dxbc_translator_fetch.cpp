@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <sstream>
 
@@ -26,6 +27,57 @@
 
 namespace rex::graphics {
 using namespace ucode;
+
+namespace {
+// Returns true if `hash` + `tfetch_index` is allowlisted by `list`, a string of
+// tokens separated by commas/spaces/semicolons. Each token is
+// "<hex-hash>[:<slot>[+<slot>...]]" (optional "0x" prefix on the hash):
+// a bare hash matches ALL of that shader's fetch slots; with ":4" or ":1+2"
+// only the listed Xenos tfetch slots match. Used to allowlist specific guest
+// pixel shaders (and optionally specific fetches within them, e.g. only the
+// de-swizzled fetch of a compositor whose other fetches use plain UVs) at
+// runtime, so re-targeting needs no rebuild.
+bool UcodeHashSlotInList(uint64_t hash, uint32_t tfetch_index, const std::string& list) {
+  auto is_sep = [](char c) {
+    return c == ',' || c == ';' || c == ' ' || c == '\t' || c == '\n' || c == '\r';
+  };
+  size_t i = 0, n = list.size();
+  while (i < n) {
+    while (i < n && is_sep(list[i])) {
+      ++i;
+    }
+    size_t start = i;
+    while (i < n && !is_sep(list[i])) {
+      ++i;
+    }
+    if (i > start) {
+      std::string token = list.substr(start, i - start);
+      size_t colon = token.find(':');
+      std::string hash_part = colon == std::string::npos ? token : token.substr(0, colon);
+      if (std::strtoull(hash_part.c_str(), nullptr, 16) == hash) {
+        if (colon == std::string::npos) {
+          return true;  // No slot list - all slots.
+        }
+        size_t p = colon + 1;
+        while (p < token.size()) {
+          size_t q = token.find('+', p);
+          if (q == std::string::npos) {
+            q = token.size();
+          }
+          if (q > p &&
+              std::strtoul(token.substr(p, q - p).c_str(), nullptr, 10) == tfetch_index) {
+            return true;
+          }
+          p = q + 1;
+        }
+        // Hash matched but this slot isn't listed - keep scanning (the same
+        // hash may appear again with other slots).
+      }
+    }
+  }
+  return false;
+}
+}  // namespace
 
 void DxbcShaderTranslator::ProcessVertexFetchInstruction(
     const ParsedVertexFetchInstruction& instr) {
@@ -772,6 +824,44 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
   // 2D, cube: X - width, Y - height (cube maps probably can be only square, but
   //           for simplicity).
   // 3D: X - width, Y - height, Z - depth, W - 0 if stacked 2D, 1 if 3D.
+  //
+  // For resolution-scaled, position-derived 2D samples in a
+  // pixel shader that uses PsParamGen (AC6's deferred restore passes), the guest
+  // de-swizzle now runs on integer guest pixels (see the param_gen floor) and so
+  // samples the guest-texel center, losing the host sub-pixel. We re-add it after
+  // the coordinate is normalized so the sample lands on the exact host texel =
+  // true resolution-scaled detail. Needs the guest texture size loaded below.
+  bool apply_host_subpixel_correction =
+      instr.opcode == FetchOpcode::kTextureFetch &&
+      !instr.attributes.unnormalized_coordinates &&
+      instr.dimension == xenos::FetchOpDimension::k2D && is_pixel_shader() &&
+      GetDxbcShaderModification().pixel.param_gen_enable &&
+      (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1) &&
+      REXCVAR_GET(param_gen_host_subpixel_restore);
+  // Surgical de-swizzle neutralize: some AC6 full-screen
+  // "restore/resample" passes manually de-swizzle the Xenos sub-tile layout of
+  // their source. That is correct only when the emulator keeps the source
+  // already-swizzled (scaled-resolve). When the source was detiled to LINEAR,
+  // the same de-swizzle scrambles it -> the streak that feeds the cloud/effects
+  // pipeline. For an allowlisted shader (by
+  // guest ucode hash; runtime string cvar) we replace the scrambled coordinate
+  // with the identity host-texel UV = SV_Position.xy / (guest_size * scale), a
+  // 1:1 copy. The layout mismatch is scale-independent -- the source is linear
+  // at 1x too, so this applies at ALL draw
+  // resolutions. (Only the separate param_gen sub-pixel restore above stays
+  // >1x-gated, since host sub-pixel detail exists only when upscaling.)
+  bool apply_deswizzle_identity = false;
+  if (instr.opcode == FetchOpcode::kTextureFetch &&
+      !instr.attributes.unnormalized_coordinates &&
+      instr.dimension == xenos::FetchOpDimension::k2D && is_pixel_shader() &&
+      GetDxbcShaderModification().pixel.param_gen_enable) {
+    const std::string& neutralize_hashes =
+        REXCVAR_GET(ac6_neutralize_deswizzle_hashes);
+    apply_deswizzle_identity =
+        !neutralize_hashes.empty() &&
+        UcodeHashSlotInList(current_shader().ucode_data_hash(), tfetch_index,
+                            neutralize_hashes);
+  }
   uint32_t size_needed_components = 0b0000;
   if (instr.opcode == FetchOpcode::kGetTextureWeights) {
     // Size needed for denormalization for coordinate lerp factor.
@@ -835,6 +925,12 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
     // Stacked and 3D textures have different size packing - need to get whether
     // the texture is 3D unconditionally.
     size_needed_components |= 0b1000;
+  }
+  if (apply_host_subpixel_correction || apply_deswizzle_identity) {
+    // Need the guest texture width/height (XY) to convert the host sub-pixel
+    // offset (Tier B) or the SV_Position into normalized texture space
+    // (de-swizzle identity).
+    size_needed_components |= 0b0011;
   }
   uint32_t size_and_is_3d_temp = size_needed_components ? PushSystemTemp() : UINT32_MAX;
   if (size_needed_components) {
@@ -1146,6 +1242,66 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
                     dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
         }
       }
+    }
+    if (apply_host_subpixel_correction) {
+      // coord_and_sampler_temp.xy is the final normalized coordinate, sampling
+      // the guest-texel center (host texel scale*swizzle(g) + scale/2). Shift it
+      // to the current host sub-pixel so it samples host texel scale*swizzle(g)+s
+      // (= the host-resolution swizzle), landing on an exact texel center.
+      uint32_t host_subpixel_temp = PushSystemTemp();
+      // host_subpixel.xy = floor(SV_Position.xy) mod draw_resolution_scale.
+      in_position_used_ |= 0b0011;
+      a_.OpFToU(dxbc::Dest::R(host_subpixel_temp, 0b0011),
+                dxbc::Src::V1D(in_reg_ps_position_));
+      a_.OpUDiv(dxbc::Dest::Null(), dxbc::Dest::R(host_subpixel_temp, 0b0011),
+                dxbc::Src::R(host_subpixel_temp),
+                dxbc::Src::LU(uint32_t(draw_resolution_scale_x_),
+                              uint32_t(draw_resolution_scale_y_), 1, 1));
+      a_.OpUToF(dxbc::Dest::R(host_subpixel_temp, 0b0011), dxbc::Src::R(host_subpixel_temp));
+      // delta.xy = (host_subpixel - (scale-1)/2) / (guest_size * scale).
+      a_.OpAdd(dxbc::Dest::R(host_subpixel_temp, 0b0011), dxbc::Src::R(host_subpixel_temp),
+               dxbc::Src::LF(-(float(draw_resolution_scale_x_) - 1.0f) * 0.5f,
+                             -(float(draw_resolution_scale_y_) - 1.0f) * 0.5f, 0.0f, 0.0f));
+      a_.OpDiv(dxbc::Dest::R(host_subpixel_temp, 0b0011), dxbc::Src::R(host_subpixel_temp),
+               dxbc::Src::R(size_and_is_3d_temp));
+      a_.OpMul(dxbc::Dest::R(host_subpixel_temp, 0b0011), dxbc::Src::R(host_subpixel_temp),
+               dxbc::Src::LF(1.0f / float(draw_resolution_scale_x_),
+                             1.0f / float(draw_resolution_scale_y_), 0.0f, 0.0f));
+      // Only resolution-scaled textures are stored at host resolution.
+      a_.OpAnd(dxbc::Dest::R(host_subpixel_temp, 0b0100),
+               LoadSystemConstant(SystemConstants::Index::kTexturesResolutionScaled,
+                                  offsetof(SystemConstants, textures_resolution_scaled),
+                                  dxbc::Src::kXXXX),
+               dxbc::Src::LU(uint32_t(1) << tfetch_index));
+      a_.OpIf(true, dxbc::Src::R(host_subpixel_temp, dxbc::Src::kZZZZ));
+      a_.OpAdd(dxbc::Dest::R(coord_and_sampler_temp, 0b0011),
+               dxbc::Src::R(coord_and_sampler_temp), dxbc::Src::R(host_subpixel_temp));
+      a_.OpEndIf();
+      // Release host_subpixel_temp.
+      PopSystemTemp();
+    }
+    if (apply_deswizzle_identity) {
+      // coord_and_sampler_temp.xy is the guest de-swizzled coordinate. The guest
+      // wrote these restore/resample passes for raw EDRAM-ordered resolve data,
+      // but the emulator's texture cache detiles EVERYTHING to linear,
+      // so the de-swizzle is always a wrong texel
+      // permutation here.
+      // Replace it with the identity host-texel UV =
+      // SV_Position.xy / (guest_size * scale) so the pass copies its source 1:1.
+      // Unconditional within allowlisted shaders: there is no swizzled-content
+      // texture this could break.
+      uint32_t deswizzle_temp = PushSystemTemp();
+      in_position_used_ |= 0b0011;
+      // deswizzle_temp.xy = guest_size * draw_resolution_scale = host size.
+      a_.OpMul(dxbc::Dest::R(deswizzle_temp, 0b0011),
+               dxbc::Src::R(size_and_is_3d_temp),
+               dxbc::Src::LF(float(draw_resolution_scale_x_),
+                             float(draw_resolution_scale_y_), 1.0f, 1.0f));
+      // coord.xy = SV_Position.xy / host size = identity texel-center UV.
+      a_.OpDiv(dxbc::Dest::R(coord_and_sampler_temp, 0b0011),
+               dxbc::Src::V1D(in_reg_ps_position_), dxbc::Src::R(deswizzle_temp));
+      // Release deswizzle_temp.
+      PopSystemTemp();
     }
     switch (instr.dimension) {
       case xenos::FetchOpDimension::k1D:

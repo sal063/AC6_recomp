@@ -29,6 +29,7 @@
 // TODO(benvanik): move xbox.h out
 #include <rex/system/xtypes.h>
 
+REXCVAR_DECLARE(bool, ac6_fix_trails);  // defined in graphics/flags.cpp
 REXCVAR_DEFINE_BOOL(protect_zero, true, "Memory", "Protect the zero page from reads and writes")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
@@ -527,6 +528,24 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
           reinterpret_cast<uintptr_t>(host_address) & ~(uintptr_t(host_page_size - 1));
       if (rex::memory::Protect(reinterpret_cast<void*>(page_base), host_page_size,
                                rex::memory::PageAccess::kReadWrite, nullptr)) {
+        // The write is about to proceed on a page that cached consumers (e.g.
+        // the GPU shared-memory copy of guest RAM) may still consider valid.
+        // Since the page is read-write from here on, no further faults will
+        // report writes to it, so without an explicit invalidation the cached
+        // copies go permanently stale (this froze AC6's missile/jet trail
+        // position history at zero on the GPU while CPU memory was fine).
+        // Notify the physical-memory invalidation callbacks about the whole
+        // page so caches refetch it and re-arm their own watches.
+        uint32_t recovered_physical_address = GetPhysicalAddress(virtual_address);
+        if (REXCVAR_GET(ac6_fix_trails) && recovered_physical_address != UINT32_MAX) {
+          uint32_t recovered_page_start =
+              recovered_physical_address & ~uint32_t(host_page_size - 1);
+          auto lock = global_critical_region_.Acquire();
+          for (auto invalidation_callback : physical_memory_invalidation_callbacks_) {
+            invalidation_callback->first(invalidation_callback->second, recovered_page_start,
+                                         uint32_t(host_page_size), true);
+          }
+        }
         REXSYS_WARN(
             "Recovered stale physical page protection for guest {:08X} (host {:016X}, "
             "guest_protect {:08X})",

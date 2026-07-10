@@ -102,6 +102,13 @@ class GraphicsSystem : public system::IGraphicsSystem {
     return last_vblank_interrupt_guest_tick_.load(std::memory_order_acquire);
   }
 
+  // Per-game override of the guest vblank rate, in Hz. 0 = no override (use
+  // the vsync/guest_vblank_sync_to_refresh cvar logic). Lets game-specific
+  // timing hooks pace frame-locked content (menus, cinematics) at the native
+  // rate while gameplay free-runs. Process-wide, not per-instance.
+  static void SetGuestVblankHzOverride(double hz);
+  static double GetGuestVblankHzOverride();
+
   bool Save(::rex::stream::ByteStream* stream);
   bool Restore(::rex::stream::ByteStream* stream);
 

@@ -35,6 +35,7 @@
 
 #include "../../../../../src/ac6_backend_fixes/ac6_backend_hooks.h"
 #include "../../../../../src/ac6_native_graphics.h"
+#include "../../../../../src/render_hooks.h"
 
 REXCVAR_DEFINE_BOOL(d3d12_bindless, true, "GPU/D3D12", "Use bindless resources where available")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
@@ -223,6 +224,15 @@ void D3D12CommandProcessor::InvalidateVertexBufferResidency(uint32_t vfetch_inde
     return;
   }
   vertex_buffers_in_sync_[vfetch_index >> 6] &= ~(uint64_t(1) << (vfetch_index & 63));
+}
+
+std::pair<uint32_t, uint32_t> D3D12CommandProcessor::VertexBufferMemoryInvalidationCallbackThunk(
+    void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range) {
+  // Runs on the writing (guest) thread - just flag; the GPU thread drops its
+  // cached vertex buffer states at the next draw.
+  auto command_processor = static_cast<D3D12CommandProcessor*>(context_ptr);
+  command_processor->vertex_buffer_memory_invalidated_.store(true, std::memory_order_release);
+  return std::make_pair(uint32_t(0), UINT32_MAX);
 }
 
 void D3D12CommandProcessor::InvalidateVertexBufferResidencyRange(uint32_t first_vfetch,
@@ -1098,6 +1108,16 @@ bool D3D12CommandProcessor::SetupContext() {
     REXGPU_ERROR("Failed to initialize shared memory");
     return false;
   }
+  // CPU writes to watched GPU-visible memory must drop the cached vertex
+  // buffer states: the vertex_buffer_states_ address cache otherwise skips
+  // RequestRanges forever for buffers whose fetch constants never change
+  // (e.g. AC6's fixed-address trail history ring), so pages invalidated by
+  // the CPU would never be re-uploaded to the GPU copy.
+  if (REXCVAR_GET(ac6_fix_trails)) {
+    vertex_buffer_memory_invalidation_callback_handle_ =
+        memory_->RegisterPhysicalMemoryInvalidationCallback(
+            VertexBufferMemoryInvalidationCallbackThunk, this);
+  }
 
   // Initialize the render target cache before configuring binding - need to
   // know if using rasterizer-ordered views for the bindless root signature.
@@ -1905,6 +1925,11 @@ void D3D12CommandProcessor::ShutdownContext() {
 
   render_target_cache_.reset();
 
+  if (vertex_buffer_memory_invalidation_callback_handle_) {
+    memory_->UnregisterPhysicalMemoryInvalidationCallback(
+        vertex_buffer_memory_invalidation_callback_handle_);
+    vertex_buffer_memory_invalidation_callback_handle_ = nullptr;
+  }
   shared_memory_.reset();
 
   deferred_command_list_.Reset();
@@ -2636,6 +2661,13 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   bool memexport_used_pixel = pixel_shader && (pixel_shader->memexport_eM_written() != 0);
   bool memexport_used = memexport_used_vertex || memexport_used_pixel;
 
+  // AC6: the world/effects compositor draws once per frame whenever the 3D
+  // world renders (never in the 2D front-end) - stamp it as the "gameplay
+  // world active" signal for the dynamic FPS pacing.
+  if (pixel_shader && pixel_shader->ucode_data_hash() == UINT64_C(0x17e5e4ac3e713245)) {
+    ac6::NotifyWorldCompositorDraw();
+  }
+
   if (!BeginSubmission(true)) {
     return false;
   }
@@ -2932,6 +2964,14 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // Must not call anything that can change the descriptor heap from now on!
 
   // Ensure vertex buffers are resident.
+  if (vertex_buffer_memory_invalidated_.exchange(false, std::memory_order_acquire)) {
+    // The CPU wrote to watched GPU-visible memory since the last draw: cached
+    // vertex buffer states may cover invalidated pages, and the address-match
+    // shortcut below would skip the RequestRanges re-upload forever. Drop the
+    // cache; the shared-memory validity fast path keeps still-valid buffers
+    // cheap to re-request.
+    InvalidateAllVertexBufferResidency();
+  }
   const Shader::ConstantRegisterMap& constant_map_vertex = vertex_shader->constant_register_map();
   for (uint32_t i = 0; i < rex::countof(constant_map_vertex.vertex_fetch_bitmap); ++i) {
     uint32_t vfetch_bits_remaining = constant_map_vertex.vertex_fetch_bitmap[i];

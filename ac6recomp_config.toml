@@ -10585,6 +10585,27 @@ address = 0x821EFD38
 name = "ac6DeltaDivisorHook"
 registers = ["r29"]
 
+# Fractional-remainder delta precision.
+#
+# The game's frame delta is an INTEGER: at 0x821EFD5C it computes
+# r11 = (elapsed_ticks * 100) / (freq / divisor), then r8 = min(r11 + 1, 100).
+# The truncation plus the +1 guard bias the delta HIGH by (1 - frac) every
+# frame: +2% at 60fps (51 vs 50.85 true), +10% at 300fps (11 vs ~10.2) — a
+# systematic game-speed inflation at unlocked framerates, and the error only
+# grows with fps because the integer gets smaller.
+#
+# This hook fires at 0x821EFD74, right after the guard/cap, where r8 = final
+# integer delta, r30 = elapsed timebase ticks, r10 = ticks-per-frame
+# (freq / divisor), r29 = divisor. While the unlock's divisor remap is active
+# (r29 == 30) it replaces r8 with floor(exact + remainder), carrying the
+# fractional remainder across frames so the SUM of deltas tracks real time
+# exactly (average bias -> 0 at any framerate). Inactive (30fps native,
+# cutscene clamp, menus) it leaves the vanilla value untouched.
+[[midasm_hook]]
+address = 0x821EFD74
+name = "ac6DeltaPrecisionHook"
+registers = ["r8", "r10", "r29", "r30"]
+
 # Record frame timestamps at each D3DDevice_Swap call for timing overlay.
 # Placed before the device[21516] branch so it fires unconditionally —
 # when that field is non-zero the function skips VdSwap, which caused

@@ -148,6 +148,57 @@ set EXTRACT_DIR=assets
 if exist "!EXTRACT_DIR!\default.xex" (
     echo [OK] '!EXTRACT_DIR!\default.xex' already exists. Skipping extraction.
 ) else (
+    echo Performing checksum...
+    set "ISO_CHECKSUM="
+    for /f "skip=1 tokens=*" %%h in ('certutil -hashfile "!ISO_FILE!" SHA256') do (
+        set "ISO_CHECKSUM=%%h"
+        goto :_iso_checksum_goto
+    )
+    :_iso_checksum_goto
+    rem Remove any spaces that certutil inserts between byte groups
+    set "ISO_CHECKSUM=!ISO_CHECKSUM: =!"
+    if "!ISO_CHECKSUM!"=="" (
+        echo [ERROR] Failed to calculate ISO checksum.
+        pause
+        exit /b 1
+    )
+    echo ISO checksum: !ISO_CHECKSUM!
+
+    set ISO_REGION_CODE=2
+    :: NTSC-J / NTSC-U Version
+    if !ISO_CHECKSUM! == 204c5e645d79da8776699c12f17bd069f869fbdb10ae79015d1a0ef2b743c98c (
+        echo [INFO] NTSC-J / NTSC-U Version detected.
+        set ISO_REGION_CODE=0
+    )
+    :: EU Rev 1
+    if !ISO_CHECKSUM! == c1a5a5aa773197b3f171716e3d6a04ac3fde31f42edd969765ee6e38a4892b5f (
+        echo [INFO] EU Revision 1 detected.
+        set ISO_REGION_CODE=1
+    )
+    :: EU Original Revision
+    if !ISO_CHECKSUM! == ae078ef27df875fe706536e86f37d6653b0c01aa214f693d3f96d576483a462e (
+        echo [INFO] EU Original Revision detected.
+        set ISO_REGION_CODE=1
+    )
+
+    :: PAL Region Detected
+    if !ISO_REGION_CODE! equ 1 (
+        echo [ERROR] PAL Version detected. PAL Version is currently not supported. You can try recompiling manually, but it probably won't work.
+        pause
+        exit /b 1
+    )
+    :: Checksum not recognized for any known region
+    if !ISO_REGION_CODE! equ 2 (
+        echo [ERROR] Checksum failed. The ISO file may be corrupted or an unsupported version. You can try recompiling manually, but it might not work. 
+        pause
+        exit /b 1
+    )
+
+    if !ISO_REGION_CODE! equ 0 (
+        set ISO_REGION=NTSC
+    )
+    echo [OK] Checksum complete. !ISO_REGION! version detected.
+
     echo Extracting '!ISO_FILE!' to '!EXTRACT_DIR!' directory...
     if not exist "!EXTRACT_DIR!" mkdir "!EXTRACT_DIR!"
     !EXTRACT_XISO_EXE! -d "!EXTRACT_DIR!" "!ISO_FILE!"

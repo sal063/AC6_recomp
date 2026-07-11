@@ -14,13 +14,9 @@ assets/
 *.pkg
 *.bin
 
-# Tools
-extract-xiso.exe
-
 # VS local settings
 .vs/
 .vscode/
-.idea/
 
 # Copilot and debugging workflow
 .github/instructions/

@@ -101,13 +101,20 @@ your ac6recomp folder.
 4. Enabling DLC Licenses
 --------------------------------------------------------------------------------
 
-To bypass license checks for the copied DLC files, you must configure the 
-global license mask cvar in the game's configuration file.
+By default, recent versions of the PC port automatically configure the global 
+license mask cvar to enable all licenses (defaulting to 4294967295 / 0xFFFFFFFF). 
+This means you do not need to manually configure the license mask in your TOML 
+file for standard DLC to work out of the box.
 
-1. Open "ac6recomp.toml" in your game root directory.
-2. Add or modify the "license_mask" setting to enable all licenses:
+However, if you want to explicitly configure or override this behavior, you can 
+manage it via "ac6recomp.toml" in your game root directory:
 
-    license_mask = 4294967295
+1. Open "ac6recomp.toml".
+2. Set the "license_mask" to your preferred value:
+   
+   - To unlock all licenses (default):
+     license_mask = 4294967295
+     
+   - To enforce strict, header-accurate checks:
+     license_mask = 0
 
-This mask (representing 0xFFFFFFFF) overrides the package-specific license 
-checks, allowing all custom or extracted content to load in the game.

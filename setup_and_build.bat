@@ -119,6 +119,12 @@ echo.
 echo =========================================
 echo ISO Detection and Extraction
 echo =========================================
+set EXTRACT_DIR=assets
+if exist "!EXTRACT_DIR!\default.xex" if exist "!EXTRACT_DIR!\DATA.TBL" if exist "!EXTRACT_DIR!\DATA00.PAC" if exist "!EXTRACT_DIR!\DATA01.PAC" (
+    echo [OK] Assets folder already exists and contains default.xex and PAC data archives. Skipping ISO check and extraction.
+    goto :extraction_done
+)
+
 set ISO_FILE=
 for %%f in (*.iso) do (
     set ISO_FILE=%%f
@@ -144,21 +150,19 @@ if not exist "!EXTRACT_XISO_EXE!" (
     )
 )
 
-set EXTRACT_DIR=assets
-if exist "!EXTRACT_DIR!\default.xex" (
-    echo [OK] '!EXTRACT_DIR!\default.xex' already exists. Skipping extraction.
-) else (
-    echo Extracting '!ISO_FILE!' to '!EXTRACT_DIR!' directory...
-    if not exist "!EXTRACT_DIR!" mkdir "!EXTRACT_DIR!"
-    !EXTRACT_XISO_EXE! -d "!EXTRACT_DIR!" "!ISO_FILE!"
-    if !errorlevel! neq 0 (
-        echo [ERROR] Failed to extract ISO.
-        pause
-        exit /b 1
-    )
-    echo [OK] Extraction complete!
+echo Extracting '!ISO_FILE!' to '!EXTRACT_DIR!' directory...
+if not exist "!EXTRACT_DIR!" mkdir "!EXTRACT_DIR!"
+!EXTRACT_XISO_EXE! -d "!EXTRACT_DIR!" "!ISO_FILE!"
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to extract ISO.
+    pause
+    exit /b 1
 )
+echo [OK] Extraction complete!
+
+:extraction_done
 echo.
+
 
 echo =========================================
 echo Building the Game (MSVC Backend)

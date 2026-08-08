@@ -1,0 +1,120 @@
+================================================================================
+AC6 DLC Loading Guide
+================================================================================
+
+Goal: install and configure Xbox 360 DLC content (such as extra aircraft, 
+paint schemes, and missions) for use in the AC6 Recompiled PC port.
+
+
+--------------------------------------------------------------------------------
+0. Prerequisites
+--------------------------------------------------------------------------------
+
+- Your legally obtained Ace Combat 6 DLC packages (STFS containers).
+- Xenia Canary emulator installed on your system (used to manage and extract 
+  the DLC content).
+- The recompiled AC6 game executable (ac6recomp.exe) configured and running.
+
+
+--------------------------------------------------------------------------------
+1. Installing the DLC via Xenia Canary
+--------------------------------------------------------------------------------
+
+Xenia Canary manages DLC packages under a Title ID-based directory structure 
+and handles content extraction/decryption.
+
+1. Launch Xenia Canary.
+2. Select File -> Install Content from the top menu.
+3. Open your DLC package file (the STFS container). Xenia will automatically 
+   decrypt and extract the content to its local directory structure.
+
+Alternatively, you can manually extract the content from the packages using 
+third-party tools like Velocity or wxPirs.
+
+
+--------------------------------------------------------------------------------
+2. Locating the Extracted DLC Files
+--------------------------------------------------------------------------------
+
+Xenia Canary installs content into its local directory. Depending on how 
+Xenia Canary was set up:
+
+- By default, it is located in your Windows Documents folder:
+  %USERPROFILE%\Documents\Xenia\
+  
+- Alternatively, if running in portable mode, it will generate directories 
+  directly in the same folder where the xenia_canary.exe is located.
+
+TIP: You can easily open this directory directly from Xenia Canary by 
+selecting File -> Show content directory... from the top menu.
+
+Inside the Xenia directory, locate the Ace Combat 6 folder using the game's 
+Title ID (4E4D07D1). Navigate to the content subfolder:
+
+    ...\4E4D07D1\00000002\
+
+This folder will contain one or more subdirectories named after the DLC 
+package hashes (40-character hexadecimal strings). Each subdirectory 
+represents a DLC package containing the raw game data files (like 
+"dlcolorname.dat").
+
+Additionally, Xenia generates package headers (.header files) which are 
+located under:
+
+    ...\4E4D07D1\Headers\00000002\
+
+
+
+--------------------------------------------------------------------------------
+3. Copying DLC to the Recompiled Game VFS
+--------------------------------------------------------------------------------
+
+The recompiled PC port resolves DLC packages from its local user data directory, 
+which by default is:
+
+    %USERPROFILE%\Documents\ac6recomp\
+
+You must copy the directory structure and files from your Xenia directory into 
+your ac6recomp folder. 
+
+1. Copy the DLC content directories from Xenia to the PC port's content folder:
+   
+   Source: 
+   %USERPROFILE%\Documents\Xenia\4E4D07D1\00000002\<PackageHashFolder>
+   
+   Destination:
+   %USERPROFILE%\Documents\ac6recomp\0000000000000000\4E4D07D1\00000002\<PackageHashFolder>
+
+2. Copy the DLC package header files:
+   
+   Source: 
+   %USERPROFILE%\Documents\Xenia\4E4D07D1\Headers\00000002\<PackageHash>.header
+   
+   Destination:
+   %USERPROFILE%\Documents\ac6recomp\0000000000000000\4E4D07D1\Headers\00000002\<PackageHash>.header
+
+*Note: The root directory for the PC port's content uses "0000000000000000" 
+(representing XUID 0) for marketplace content.*
+
+
+--------------------------------------------------------------------------------
+4. Enabling DLC Licenses
+--------------------------------------------------------------------------------
+
+By default, recent versions of the PC port automatically configure the global 
+license mask cvar to enable all licenses (defaulting to 4294967295 / 0xFFFFFFFF). 
+This means you do not need to manually configure the license mask in your TOML 
+file for standard DLC to work out of the box.
+
+However, if you want to explicitly configure or override this behavior, you can 
+manage it via "ac6recomp.toml" in your game root directory:
+
+1. Open "ac6recomp.toml".
+2. Set the "license_mask" to your preferred value:
+   
+   - To unlock all licenses (default):
+     license_mask = 4294967295
+     
+   - To enforce strict, header-accurate checks:
+     license_mask = 0
+

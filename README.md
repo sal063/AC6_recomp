@@ -74,10 +74,14 @@ d3d12_low_latency_swap_chain = true
 d3d12_max_frame_latency = 1
 ```
 
-## Modding Docs
+## Documentation & Modding Docs
 
+- [Asset Extraction Walkthrough](docs/ac6_asset_extraction_walkthrough.txt)
+- [Audio Extraction Walkthrough](docs/ac6_audio_extraction_walkthrough.txt)
+- [DLC Loading Guide](docs/ac6_dlc_loading_guide.txt)
 - [Texture Swap Modding Guide](docs/TEXTURE_SWAP_MODDING_GUIDE.txt)
 - [Texture Swap Reference](docs/TEXTURE_SWAPS.txt)
+
 
 ## Runtime Defaults
 

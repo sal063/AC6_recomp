@@ -151,14 +151,27 @@ class PosixFileHandle : public FileHandle {
   bool Read(size_t file_offset, void* buffer, size_t buffer_length,
             size_t* out_bytes_read) override {
     ssize_t out = pread(handle_, buffer, buffer_length, file_offset);
-    *out_bytes_read = out;
-    return out >= 0 ? true : false;
+    // On failure pread returns -1, which as a size_t is SIZE_MAX - reporting a
+    // colossal transfer to a caller that may not check the bool.
+    *out_bytes_read = out < 0 ? 0 : size_t(out);
+    if (out < 0) {
+      return false;
+    }
+    // A read starting at or past the end must FAIL, so HostPathFile turns it
+    // into X_STATUS_END_OF_FILE the way the guest kernel does. Win32 ReadFile
+    // does that for us (ERROR_HANDLE_EOF); pread just returns 0, which reaches
+    // the guest as "success, zero bytes, position unchanged" - a loader reading
+    // a file to its end then never terminates.
+    return out != 0 || buffer_length == 0;
   }
   bool Write(size_t file_offset, const void* buffer, size_t buffer_length,
              size_t* out_bytes_written) override {
     ssize_t out = pwrite(handle_, buffer, buffer_length, file_offset);
-    *out_bytes_written = out;
-    return out >= 0 ? true : false;
+    *out_bytes_written = out < 0 ? 0 : size_t(out);
+    // A short write is a failure (a full disk reports one), and the atomic
+    // write path must see it as such rather than committing a truncated temp
+    // over a good file.
+    return out >= 0 && size_t(out) == buffer_length;
   }
   bool SetLength(size_t length) override { return ftruncate(handle_, length) >= 0 ? true : false; }
   void Flush() override { fsync(handle_); }
@@ -169,24 +182,26 @@ class PosixFileHandle : public FileHandle {
 
 std::unique_ptr<FileHandle> FileHandle::OpenExisting(const std::filesystem::path& path,
                                                      uint32_t desired_access) {
-  int open_access = 0;
-  if (desired_access & FileAccess::kGenericRead) {
-    open_access |= O_RDONLY;
-  }
-  if (desired_access & FileAccess::kGenericWrite) {
-    open_access |= O_WRONLY;
-  }
-  if (desired_access & FileAccess::kGenericExecute) {
-    open_access |= O_RDONLY;
-  }
-  if (desired_access & FileAccess::kGenericAll) {
-    open_access |= O_RDWR;
-  }
-  if (desired_access & FileAccess::kFileReadData) {
-    open_access |= O_RDONLY;
-  }
-  if (desired_access & FileAccess::kFileWriteData) {
-    open_access |= O_WRONLY;
+  // O_RDONLY/O_WRONLY/O_RDWR are an enumeration in the low two bits (0/1/2),
+  // not bit flags, so they cannot be OR-ed together: read|write ORs to 1, which
+  // is O_WRONLY, and every read on that descriptor then fails with EBADF. The
+  // title opens its save read+write, so the reads silently returned nothing and
+  // it wrote back whatever its buffer already held. Windows has no equivalent
+  // problem - GENERIC_READ|GENERIC_WRITE really are bit flags.
+  const bool wants_read =
+      (desired_access & (FileAccess::kGenericRead | FileAccess::kGenericExecute |
+                         FileAccess::kFileReadData | FileAccess::kGenericAll)) != 0;
+  const bool wants_write =
+      (desired_access & (FileAccess::kGenericWrite | FileAccess::kFileWriteData |
+                         FileAccess::kFileAppendData | FileAccess::kGenericAll)) != 0;
+
+  int open_access;
+  if (wants_read && wants_write) {
+    open_access = O_RDWR;
+  } else if (wants_write) {
+    open_access = O_WRONLY;
+  } else {
+    open_access = O_RDONLY;
   }
   if (desired_access & FileAccess::kFileAppendData) {
     open_access |= O_APPEND;

@@ -3937,6 +3937,16 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
                                         builder.makeUintConstant(8), builder.makeUintConstant(24));
         }
       }
+    } else if (mode.output == TransferOutput::kStencilBit && source_stencil[0] != spv::NoResult) {
+      // A stencil-bit transfer from a depth/stencil source binds only the
+      // stencil texture - the depth is not needed and deliberately not bound -
+      // so neither branch above runs and `packed` is left unset. The kill below
+      // only discards a sample when its bit is clear, and it is skipped
+      // entirely when `packed` is NoResult, so every sample would keep its bit
+      // and the destination stencil would come out 0xFF everywhere regardless
+      // of the source. Supply the stencil, which is all the kill needs, in bits
+      // 0:7.
+      packed = source_stencil[0];
     }
     switch (mode.output) {
       case TransferOutput::kColor: {
@@ -5328,6 +5338,21 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
         const VkPipeline* transfer_pipelines = GetTransferPipelines(
             TransferPipelineKey(transfer_render_pass_key, transfer_shader_key));
         if (!transfer_pipelines) {
+          // This skip is otherwise silent, and a transfer that can never be
+          // built leaves the destination render target untouched (black).
+          static bool logged = false;
+          if (!logged) {
+            logged = true;
+            REXGPU_ERROR(
+                "No transfer pipeline: mode={} src_msaa={} dest_msaa={} src_fmt={} dest_fmt={} "
+                "rp_msaa={}",
+                uint32_t(transfer_shader_key.mode),
+                uint32_t(transfer_shader_key.source_msaa_samples),
+                uint32_t(transfer_shader_key.dest_msaa_samples),
+                uint32_t(transfer_shader_key.source_resource_format),
+                uint32_t(transfer_shader_key.dest_resource_format),
+                uint32_t(transfer_render_pass_key.msaa_samples));
+          }
           continue;
         }
         command_processor_.BindExternalGraphicsPipeline(transfer_pipelines[0]);

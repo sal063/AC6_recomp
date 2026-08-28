@@ -11,6 +11,19 @@
 
 namespace rex::audio {
 
+// Guest render-driver frames needed to cover one host device period. A device
+// period that is not a whole number of 256-sample guest frames still has to be
+// satisfied from whole frames, so this rounds up; without the round-up the host
+// asks for more audio than the runtime is ever allowed to queue and the
+// shortfall is filled with silence on every callback.
+constexpr uint32_t RequiredQueueFramesForDevice(const uint32_t device_buffer_frames,
+                                                const uint32_t headroom_frames = 0) {
+  const uint32_t buffer_frames = device_buffer_frames > 0 ? device_buffer_frames : 1u;
+  const uint32_t periods =
+      (buffer_frames + kRenderDriverTicSamplesPerFrame - 1) / kRenderDriverTicSamplesPerFrame;
+  return (periods > 3u ? periods : 3u) + headroom_frames;
+}
+
 class AudioDriver {
  public:
   explicit AudioDriver(memory::Memory* memory);

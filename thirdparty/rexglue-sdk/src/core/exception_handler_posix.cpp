@@ -30,6 +30,7 @@ namespace rex::arch {
 bool signal_handlers_installed_ = false;
 struct sigaction original_sigill_handler_;
 struct sigaction original_sigsegv_handler_;
+ExceptionHandler::UnhandledReporter unhandled_reporter_ = nullptr;
 
 // This can be as large as needed, but isn't often needed.
 // As we will be sometimes firing many exceptions we want to avoid having to
@@ -205,6 +206,51 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+
+  // Nothing claimed the fault.
+  //
+  // Returning here re-executes the faulting instruction, which faults again -
+  // the thread spins inside the signal handler forever, burning a core, with no
+  // diagnostic anywhere. That is a POSIX-only failure mode: on Windows an
+  // unclaimed access violation runs off the end of the SEH chain and terminates
+  // the process, so the same guest fault is loud and immediate there and shows
+  // up here as an unexplained "deadlock" instead.
+  //
+  // Report it, then restore the default disposition and return. The faulting
+  // instruction re-executes once more and dies in SIG_DFL, which terminates the
+  // process with a core dump pointing at the real faulting instruction rather
+  // than at a re-raise inside this handler.
+  const uint64_t fault_address = uint64_t(signal_info->si_addr);
+  const uint64_t kGuestVirtualBase = 0x100000000ull;
+  const uint64_t kGuestVirtualSize = 0x100000000ull;
+  if (signal_number == SIGSEGV && fault_address >= kGuestVirtualBase &&
+      fault_address < kGuestVirtualBase + kGuestVirtualSize) {
+    REXLOG_ERROR(
+        "[FAULT] unhandled access violation at guest address {:#010x} (host {:#x}), host rip={:#x}. "
+        "Nothing has this mapped - most likely a guest null pointer. Terminating, as Windows "
+        "would, instead of retrying the instruction forever.",
+        fault_address - kGuestVirtualBase, fault_address, thread_context.rip);
+  } else {
+    REXLOG_ERROR("[FAULT] unhandled signal {} at address {:#x}, host rip={:#x}. Terminating.",
+                 signal_number, fault_address, thread_context.rip);
+  }
+
+  // Let the guest-aware layer describe what the title was doing, before the
+  // default disposition takes the process down.
+  if (unhandled_reporter_) {
+    unhandled_reporter_(fault_address, thread_context.rip,
+                        ex.access_violation_operation() ==
+                            Exception::AccessViolationOperation::kWrite);
+  }
+
+  struct sigaction default_action;
+  std::memset(&default_action, 0, sizeof(default_action));
+  default_action.sa_handler = SIG_DFL;
+  sigaction(signal_number, &default_action, nullptr);
+}
+
+void ExceptionHandler::SetUnhandledReporter(UnhandledReporter fn) {
+  unhandled_reporter_ = fn;
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {

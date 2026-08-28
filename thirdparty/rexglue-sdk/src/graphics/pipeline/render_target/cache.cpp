@@ -1332,6 +1332,20 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
         // Only perform the copying when actually changing the latest owner, not
         // just the latest host depth owner - the transfer source is expected to
         // be different than the destination.
+        if (!transfer_source.IsEmpty() && transfer_source == dest) {
+          // The guard below is supposed to make this impossible. If it ever
+          // fires, a render target would be sampled while bound as its own
+          // attachment, which is undefined.
+          static bool logged = false;
+          if (!logged) {
+            logged = true;
+            REXGPU_ERROR(
+                "Render target would transfer to itself: key={:08X} base={} pitch32={} msaa={} "
+                "depth={}",
+                dest.key, uint32_t(dest.base_tiles), uint32_t(dest.pitch_tiles_at_32bpp),
+                uint32_t(dest.msaa_samples), uint32_t(dest.is_depth));
+          }
+        }
         if (!transfer_source.IsEmpty() && transfer_source != dest) {
           uint32_t transfer_end_tiles = std::min(it->second.end_tiles, extent_end);
           if (!resolve_clear_cutout ||

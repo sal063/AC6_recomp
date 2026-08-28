@@ -4,6 +4,7 @@
 // This file is yours to edit. 'rexglue migrate' will NOT overwrite it.
 
 #include <rex/cvar.h>
+#include <rex/graphics/pipeline/texture/cache.h>
 #include <rex/logging.h>
 
 REXCVAR_DECLARE(bool, ac6_render_capture);
@@ -165,11 +166,19 @@ void EnforceAc6PerformanceModeOverrides() {
 }
 
 void ApplyAc6FixDefaults() {
-    // Post-config, these read the USER's draw scale - with the old app-create
+    // Post-config, this reads the USER's draw scale - with the old app-create
     // timing this gate always saw the default 1x, so the scaling fix payload
     // never engaged for anyone who set their scale in the toml.
-    const bool scaled = REXCVAR_GET(draw_resolution_scale_x) > 1 ||
-                        REXCVAR_GET(draw_resolution_scale_y) > 1;
+    //
+    // Ask the texture cache for the EFFECTIVE scale rather than reading
+    // draw_resolution_scale_x/y: the combined resolution_scale cvar - what the
+    // settings menu writes - leaves those two at 1, so reading them alone left
+    // the fixes off for everyone who scaled that way.
+    uint32_t effective_scale_x = 1;
+    uint32_t effective_scale_y = 1;
+    rex::graphics::TextureCache::GetConfigDrawResolutionScale(effective_scale_x,
+                                                              effective_scale_y);
+    const bool scaled = effective_scale_x > 1 || effective_scale_y > 1;
 
     // param_gen floor + host sub-pixel restore only bites at >1x --
     // inert at 1x, so gate it on the draw scale.
@@ -240,8 +249,14 @@ void ApplyAc6PerformanceModeOverridesPublic() {
 // This is the support line: it shows whether a master switch genuinely
 // disengaged its payload.
 void LogAc6ConfigPresetSummary() {
-    REXLOG_ERROR("AC6 config: graphics mode={} capture={}", REXCVAR_GET(ac6_graphics_mode),
-                 REXCVAR_GET(ac6_render_capture) ? "true" : "false");
+    uint32_t effective_scale_x = 1;
+    uint32_t effective_scale_y = 1;
+    rex::graphics::TextureCache::GetConfigDrawResolutionScale(effective_scale_x,
+                                                              effective_scale_y);
+    REXLOG_ERROR("AC6 config: graphics mode={} capture={} draw scale={}x{}",
+                 REXCVAR_GET(ac6_graphics_mode),
+                 REXCVAR_GET(ac6_render_capture) ? "true" : "false", effective_scale_x,
+                 effective_scale_y);
     REXLOG_ERROR("AC6 fixes: scaling={} deswizzle={} dof={} water_line={} perf_mode={} "
                  "unlock_fps={}",
                  REXCVAR_GET(ac6_fix_scaling), REXCVAR_GET(ac6_fix_deswizzle),

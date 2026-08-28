@@ -20,11 +20,16 @@
 // registry, so the game stays self-consistent downstream. The emulator sees
 // an ordinary full-res surface - no RT-cache changes needed.
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <sys/uio.h>
+#include <unistd.h>
+#endif
 
 #include <atomic>
 #include <cstdint>
@@ -288,6 +293,7 @@ std::atomic<uint32_t> g_downscaler_resolve_pending{0};
 std::atomic<uint32_t> g_mask_base{0};
 
 bool SafeCopyU32Array(const uint32_t* host, uint32_t* out, uint32_t count) noexcept {
+#if defined(_WIN32)
     __try {
         for (uint32_t i = 0; i < count; ++i) {
             out[i] = host[i];
@@ -296,6 +302,19 @@ bool SafeCopyU32Array(const uint32_t* host, uint32_t* out, uint32_t count) noexc
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+#else
+    // The source is guest memory, which is an shm mapping: a page can be
+    // readable and still unbacked, so a plain dereference raises SIGBUS rather
+    // than a recoverable fault. process_vm_readv performs the access in the
+    // kernel and reports EFAULT instead of signalling, which is the guard this
+    // needs. SEH_TRY was the other candidate, but it recovers by throwing from
+    // a signal handler - far heavier than a bounded read, and it would have to
+    // be armed on every thread that can reach here.
+    iovec local{out, size_t(count) * sizeof(uint32_t)};
+    iovec remote{const_cast<uint32_t*>(host), size_t(count) * sizeof(uint32_t)};
+    return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) ==
+           ssize_t(size_t(count) * sizeof(uint32_t));
+#endif
 }
 }  // namespace
 
@@ -355,8 +374,8 @@ void FxNoteResolveDest(uint32_t dest_obj, uint8_t* base) {
         return;
     }
     // words are big-endian; fetch dword_1 (base+fmt) at [8], dword_2 (dims) at [9].
-    const uint32_t d1 = _byteswap_ulong(words[8]);
-    const uint32_t d2 = _byteswap_ulong(words[9]);
+    const uint32_t d1 = rex::byte_swap(words[8]);
+    const uint32_t d2 = rex::byte_swap(words[9]);
     const uint32_t view_base = (d1 >> 12) << 12;
     const uint32_t phys_base = view_base & 0x1FFFFFFFu;  // strip the 0xA0/0xC0 view
     const uint32_t w = (d2 & 0x1FFF) + 1;

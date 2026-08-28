@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <mutex>
 #include <utility>
 
 #include <rex/assert.h>
@@ -430,6 +431,14 @@ bool TextureCache::CommitPreparedTextureLoad(const PendingTextureLoad& pending_l
 
   if (!LoadTextureDataFromResidentMemoryImpl(texture, pending_load.load_base,
                                              pending_load.load_mips)) {
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      REXGPU_ERROR("Texture upload failed: base_page={:05X} {}x{} fmt={} scaled={}",
+                   uint32_t(texture_key.base_page), texture_key.GetWidth(),
+                   texture_key.GetHeight(), uint32_t(texture_key.format),
+                   uint32_t(texture_key.scaled_resolve));
+    }
     return false;
   }
 

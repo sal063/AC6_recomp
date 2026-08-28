@@ -28,18 +28,26 @@
 // the presenter is forced to letterbox: menus, hangar, briefing, FMV and the
 // attract demo render exactly vanilla.
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <sys/mman.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include <native/ui/presenter.h>
@@ -59,14 +67,29 @@ REXCVAR_DEFINE_BOOL(ac6_widescreen_cinematics, true, "AC6/Enhancements",
 // Read (never written) only to report it in the activation log.
 REXCVAR_DECLARE(bool, present_letterbox);
 
+// This file drives guest camera objects directly, which needs three things the
+// host OS provides differently: enumerating readable guest memory, reading a
+// word that may fault, and writing one that may fault. Windows uses
+// VirtualQuery plus __try/__except; POSIX uses process_vm_readv (the access
+// happens in the kernel and reports EFAULT instead of raising SIGSEGV/SIGBUS -
+// necessary because guest memory is an shm mapping where a page can be
+// readable yet unbacked) and mprotect. Everything above that split is shared.
+
 namespace {
 
 constexpr float kNativeAspect = 1.7777778f;  // BE 0x3FE38E39, exactly what the game stores
+constexpr uint64_t kGuestScanBegin = 0x00010000ull;  // page 0 is the null guard
 constexpr uint64_t kGuestScanEnd = 0xC0000000ull;  // C0/E0 views alias A0 - skip them
+#if !defined(_WIN32)
+// Chunk the POSIX sweep reads guest memory in. Large enough that the syscall
+// cost is negligible against the copy, small enough to keep the scratch buffer
+// off the "large allocation" path.
+constexpr size_t kSweepChunkBytes = 1u << 20;
+#endif
 // Mode poll every 250 ms (a cheap 3-dereference guest read) so mission
 // transitions re-aim the cameras promptly; the full memory sweep still runs on
 // the 2 s cadence (8 polls) or immediately on a transition.
-constexpr DWORD kModePollMs = 250;
+constexpr uint32_t kModePollMs = 250;
 constexpr uint32_t kSweepEveryPolls = 8;
 
 // The game's front end is a mode-task state machine (docs/re/subsystems/
@@ -198,14 +221,25 @@ void MarkerGuardsResetForSwap() {
 uint32_t HostBitsOf(float value) {
   uint32_t bits;
   std::memcpy(&bits, &value, sizeof(bits));
-  return _byteswap_ulong(bits);  // little-endian dword whose bytes read big-endian
+  return rex::byte_swap(bits);  // little-endian dword whose bytes read big-endian
 }
 
-// SEH-safe single-word accessors for the poke paths. Note the SDK's vectored
-// handler runs BEFORE these __except filters, so a write fault on a
-// GPU-write-watched physical page is still recovered transparently (like any
-// guest write); only genuinely unrecoverable access violations land here and
-// are reported as failure instead of crashing the process.
+// Fault-tolerant single-word accessors for the poke paths.
+//
+// Windows: the SDK's vectored handler runs BEFORE these __except filters, so a
+// write fault on a GPU-write-watched physical page is still recovered
+// transparently (like any guest write); only genuinely unrecoverable access
+// violations land here and are reported as failure instead of crashing.
+//
+// POSIX: reads go through process_vm_readv so an unbacked shm page reports
+// EFAULT instead of raising SIGBUS. Writes deliberately do NOT use
+// process_vm_writev - a kernel-side write would bypass the SDK's userspace
+// write-watch SIGSEGV handler, so the GPU would never learn the page changed.
+// Instead the address is probed for readability first (which rejects the
+// unmapped case) and then written normally, leaving write-watch semantics
+// exactly as they are for any other guest write.
+#if defined(_WIN32)
+
 bool SafeReadU32(const uint32_t* p, uint32_t* out) noexcept {
   __try {
     *out = *p;
@@ -224,6 +258,56 @@ bool SafeWriteU32(uint32_t* p, uint32_t value) noexcept {
   }
 }
 
+#else  // !_WIN32
+
+bool SafeReadU32(const uint32_t* p, uint32_t* out) noexcept {
+  iovec local{out, sizeof(*out)};
+  iovec remote{const_cast<uint32_t*>(p), sizeof(*out)};
+  return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == ssize_t(sizeof(*out));
+}
+
+bool SafeWriteU32(uint32_t* p, uint32_t value) noexcept {
+  uint32_t probe;
+  if (!SafeReadU32(p, &probe)) {
+    return false;
+  }
+  *p = value;
+  return true;
+}
+
+#endif  // _WIN32
+
+// Makes a host range writable. The XEX image copy holding the static default
+// aspect is mapped read-only, so the poke needs this first. Already-writable
+// pages make it a no-op on both platforms, so callers need no separate query.
+// Only ever applied to the two fixed static addresses - never to swept heap
+// pages, whose read-only state may be the SDK's GPU write watching and must be
+// left for the SDK's own handler to recover.
+bool MakeHostWritable(void* p, size_t bytes) noexcept {
+#if defined(_WIN32)
+  DWORD old_protect;
+  return VirtualProtect(p, bytes, PAGE_READWRITE, &old_protect) != 0;
+#else
+  const uintptr_t page = uintptr_t(sysconf(_SC_PAGESIZE));
+  const uintptr_t start = uintptr_t(p) & ~(page - 1);
+  const size_t len = size_t(uintptr_t(p) + bytes - start);
+  return mprotect(reinterpret_cast<void*>(start), len, PROT_READ | PROT_WRITE) == 0;
+#endif
+}
+
+// Reads a block of guest memory into a caller-owned buffer, returning the
+// number of bytes actually obtained (0 if nothing there, short if the range
+// runs into a gap). Used by the sweep on POSIX, where the scan works on a copy
+// rather than in place.
+#if !defined(_WIN32)
+size_t SafeReadBlock(const void* p, void* out, size_t bytes) noexcept {
+  iovec local{out, bytes};
+  iovec remote{const_cast<void*>(p), bytes};
+  const ssize_t got = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
+  return got < 0 ? 0 : size_t(got);
+}
+#endif
+
 // Big-endian guest dword read through the translated view, SEH-safe.
 bool SafeReadGuestU32(rex::memory::Memory* memory, uint32_t guest_ea, uint32_t* out) {
   if (!guest_ea) {
@@ -233,7 +317,7 @@ bool SafeReadGuestU32(rex::memory::Memory* memory, uint32_t guest_ea, uint32_t* 
   if (!SafeReadU32(memory->TranslateVirtual<const uint32_t*>(guest_ea), &raw)) {
     return false;
   }
-  *out = _byteswap_ulong(raw);
+  *out = rex::byte_swap(raw);
   return true;
 }
 
@@ -253,29 +337,40 @@ uint32_t ReadCurrentScreenId(rex::memory::Memory* memory) {
   return vtable;
 }
 
+// Is words[i] an aspect field whose neighbours look like a camera (fov, near,
+// far in sane ranges)? Pure predicate over an already-safe buffer - shared by
+// both platforms' sweeps.
+bool CameraSignatureAt(const uint32_t* words, size_t i, size_t count, uint32_t aspect_pattern,
+                       uint32_t prev_pattern) {
+  if (i < 1 || i + 2 >= count) {
+    return false;
+  }
+  if (words[i] != aspect_pattern && (!prev_pattern || words[i] != prev_pattern)) {
+    return false;
+  }
+  uint32_t w;
+  float fov, near_plane, far_plane;
+  w = rex::byte_swap(words[i - 1]);
+  std::memcpy(&fov, &w, sizeof(fov));
+  w = rex::byte_swap(words[i + 1]);
+  std::memcpy(&near_plane, &w, sizeof(near_plane));
+  w = rex::byte_swap(words[i + 2]);
+  std::memcpy(&far_plane, &w, sizeof(far_plane));
+  return fov > 0.05f && fov < 2.0f && near_plane > 0.005f && near_plane < 10.0f &&
+         far_plane > 1000.0f && far_plane < 200000.0f;
+}
+
+#if defined(_WIN32)
 // The raw signature scan, SEH-guarded against pages vanishing mid-read.
-// Scalar-only frame so __try is legal. Finds dwords equal to the big-endian
-// 16:9 aspect whose neighbors look like a camera (fov, near, far in sane
-// ranges); returns match count, stores up to max_out dword indices.
+// Scalar-only frame so __try is legal; scans the live view in place. Returns
+// match count, stores up to max_out dword indices.
 size_t WideScanRegionRaw(const uint32_t* words, size_t count, uint32_t aspect_pattern,
                          uint32_t prev_pattern, uint32_t* out_indices,
                          size_t max_out) noexcept {
   size_t n = 0;
   __try {
     for (size_t i = 1; i + 2 < count; ++i) {
-      if (words[i] != aspect_pattern && (!prev_pattern || words[i] != prev_pattern)) {
-        continue;
-      }
-      uint32_t w;
-      float fov, near_plane, far_plane;
-      w = _byteswap_ulong(words[i - 1]);
-      std::memcpy(&fov, &w, sizeof(fov));
-      w = _byteswap_ulong(words[i + 1]);
-      std::memcpy(&near_plane, &w, sizeof(near_plane));
-      w = _byteswap_ulong(words[i + 2]);
-      std::memcpy(&far_plane, &w, sizeof(far_plane));
-      if (fov > 0.05f && fov < 2.0f && near_plane > 0.005f && near_plane < 10.0f &&
-          far_plane > 1000.0f && far_plane < 200000.0f) {
+      if (CameraSignatureAt(words, i, count, aspect_pattern, prev_pattern)) {
         if (n < max_out) {
           out_indices[n] = uint32_t(i);
         }
@@ -286,6 +381,7 @@ size_t WideScanRegionRaw(const uint32_t* words, size_t count, uint32_t aspect_pa
   }
   return n;
 }
+#endif  // _WIN32
 
 // The previously applied target's big-endian pattern (0 = none) - lets the
 // static defaults be retargeted when the auto-derived aspect changes (window
@@ -306,12 +402,9 @@ void PatchStaticDefaults(rex::memory::Memory* memory, uint32_t aspect_pattern,
     uint32_t* host = memory->TranslateVirtual<uint32_t*>(guest);
     // Early in boot the page may not be committed yet (this runs from ~2s
     // after graphics init, during the startup logo) - skip and retry on the
-    // next sweep rather than touching it.
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(host, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
-        (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-      continue;
-    }
+    // next sweep rather than touching it. SafeReadU32 already reports an
+    // uncommitted page as failure on both platforms, so the read IS the
+    // commit check.
     uint32_t cur;
     if (!SafeReadU32(host, &cur)) {
       continue;
@@ -327,33 +420,75 @@ void PatchStaticDefaults(rex::memory::Memory* memory, uint32_t aspect_pattern,
         ++unexpected_logs;
         REXLOG_ERROR("[AC6-WIDE] static default @ 0x{:08X}: unexpected 0x{:08X} "
                      "(expected 16:9), skipping",
-                     guest, _byteswap_ulong(cur));
+                     guest, rex::byte_swap(cur));
       }
       continue;
     }
     // The XEX image copy may be mapped read-only - unprotect before writing
     // (kept writable; this field is re-checked every sweep anyway).
-    bool need_unprotect =
-        !(mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE |
-                         PAGE_EXECUTE_WRITECOPY));
-    if (need_unprotect) {
-      DWORD old_protect;
-      if (!VirtualProtect(host, sizeof(uint32_t), PAGE_READWRITE, &old_protect)) {
-        if (unexpected_logs < 4) {
-          ++unexpected_logs;
-          REXLOG_ERROR("[AC6-WIDE] static default @ 0x{:08X}: read-only and unprotect "
-                       "failed, skipping",
-                       guest);
-        }
-        continue;
+    if (!MakeHostWritable(host, sizeof(uint32_t))) {
+      if (unexpected_logs < 4) {
+        ++unexpected_logs;
+        REXLOG_ERROR("[AC6-WIDE] static default @ 0x{:08X}: read-only and unprotect "
+                     "failed, skipping",
+                     guest);
       }
+      continue;
     }
     if (SafeWriteU32(host, target_bits) && patch_logs < 8) {
       ++patch_logs;
-      REXLOG_ERROR("[AC6-WIDE] static default @ 0x{:08X}: 1.77778 -> {:g}{}", guest, target,
-                   need_unprotect ? " (page unprotected)" : "");
+      REXLOG_ERROR("[AC6-WIDE] static default @ 0x{:08X}: 1.77778 -> {:g}", guest, target);
     }
   }
+}
+
+// Is the guest page holding this address writable, according to the SDK's own
+// page tracking? Used on POSIX in place of a host protection query - it is the
+// same source of truth the guest itself sees, and on Linux it reads the
+// in-process protection shadow rather than parsing /proc/self/maps.
+bool GuestRangeWritable(rex::memory::Memory* memory, uint32_t guest_ea) {
+  auto* heap = memory->LookupHeap(guest_ea);
+  if (!heap) {
+    return false;
+  }
+  const rex::memory::PageAccess access = heap->QueryRangeAccess(guest_ea, guest_ea + 3);
+  return access == rex::memory::PageAccess::kReadWrite ||
+         access == rex::memory::PageAccess::kExecuteReadWrite;
+}
+
+// Poke one camera's aspect field, given its guest address. Shared by both
+// platforms' sweeps: it works purely off guest EAs, so it does not care
+// whether the scan ran in place (Windows) or over a copy (POSIX).
+bool PokeCameraAspect(rex::memory::Memory* memory, uint32_t hit_guest, bool region_writable,
+                      uint32_t to_bits, float to_value) {
+  static uint32_t poke_logs = 0;
+  static uint32_t skipped_ro_logs = 0;
+  // Physical-view pages (>= 0xA0000000) may be read-only due to the SDK's GPU
+  // write watching; the poke faults and the SDK's handler recovers it like any
+  // guest write. A read-only page in a plain virtual heap has no such
+  // recovery - skip those.
+  if (!region_writable && hit_guest < 0xA0000000u) {
+    if (skipped_ro_logs < 4) {
+      ++skipped_ro_logs;
+      REXLOG_ERROR("[AC6-WIDE] camera @ 0x{:08X} in read-only region, skipping", hit_guest);
+    }
+    return false;
+  }
+  uint32_t* field = memory->TranslateVirtual<uint32_t*>(hit_guest);
+  uint32_t fov_word = 0;
+  SafeReadU32(field - 1, &fov_word);
+  const uint32_t w = rex::byte_swap(fov_word);
+  float fov;
+  std::memcpy(&fov, &w, sizeof(fov));
+  if (!SafeWriteU32(field, to_bits)) {
+    return false;
+  }
+  if (poke_logs < 32) {
+    ++poke_logs;
+    REXLOG_ERROR("[AC6-WIDE] camera aspect @ 0x{:08X} (fov={:g}) -> {:g}", hit_guest, fov,
+                 to_value);
+  }
+  return true;
 }
 
 // Signature-scan committed guest memory for camera objects whose aspect field
@@ -370,14 +505,16 @@ uint32_t WidescreenSweep(rex::memory::Memory* memory, uint32_t match_a, uint32_t
     REXLOG_ERROR("[AC6-WIDE] first sweep starting");
   }
 
-  static uint32_t poke_logs = 0;
   static uint32_t sweep_logs = 0;
-  static uint32_t skipped_ro_logs = 0;
-  constexpr size_t kMaxRegionMatches = 64;
-  uint32_t indices[kMaxRegionMatches];
   uint32_t patched = 0;
 
-  uint64_t guest = 0x00010000;
+#if defined(_WIN32)
+  // Windows: walk the committed regions with VirtualQuery and scan each one in
+  // place - no copy, the __try in WideScanRegionRaw covers a page vanishing
+  // mid-scan.
+  constexpr size_t kMaxRegionMatches = 64;
+  uint32_t indices[kMaxRegionMatches];
+  uint64_t guest = kGuestScanBegin;
   while (guest < kGuestScanEnd) {
     uint8_t* host = memory->TranslateVirtual(uint32_t(guest));
     MEMORY_BASIC_INFORMATION mbi{};
@@ -400,38 +537,50 @@ uint32_t WidescreenSweep(rex::memory::Memory* memory, uint32_t match_a, uint32_t
                                        match_a, match_b, indices, kMaxRegionMatches);
       size_t stored = std::min(found, kMaxRegionMatches);
       for (size_t h = 0; h < stored; ++h) {
-        uint32_t hit_guest = uint32_t(guest + uint64_t(indices[h]) * 4);
-        // Physical-view pages (>= 0xA0000000) may be read-only due to the
-        // SDK's GPU write watching; the poke faults and the SDK's handler
-        // recovers it like any guest write. A read-only page in a plain
-        // virtual heap has no such recovery - skip those.
-        if (!writable && hit_guest < 0xA0000000u) {
-          if (skipped_ro_logs < 4) {
-            ++skipped_ro_logs;
-            REXLOG_ERROR("[AC6-WIDE] camera @ 0x{:08X} in read-only region, skipping",
-                         hit_guest);
-          }
-          continue;
-        }
-        uint32_t* field = reinterpret_cast<uint32_t*>(host + uint64_t(indices[h]) * 4);
-        uint32_t fov_word = 0;
-        SafeReadU32(field - 1, &fov_word);
-        uint32_t w = _byteswap_ulong(fov_word);
-        float fov;
-        std::memcpy(&fov, &w, sizeof(fov));
-        if (!SafeWriteU32(field, to_bits)) {
-          continue;
-        }
-        ++patched;
-        if (poke_logs < 32) {
-          ++poke_logs;
-          REXLOG_ERROR("[AC6-WIDE] camera aspect @ 0x{:08X} (fov={:g}) -> {:g}", hit_guest,
-                       fov, to_value);
+        if (PokeCameraAspect(memory, uint32_t(guest + uint64_t(indices[h]) * 4), writable,
+                             to_bits, to_value)) {
+          ++patched;
         }
       }
     }
     guest += len;
   }
+#else
+  // POSIX: there is no VirtualQuery, and /proc/self/maps is far too slow to
+  // parse per sweep. Instead stride the guest range in chunks read through
+  // process_vm_readv, which fails cleanly on anything unmapped - so the walk
+  // needs no protection map at all - and scan the copy. Writability comes from
+  // the SDK's own page tracking rather than the host mapping.
+  std::vector<uint32_t> chunk(kSweepChunkBytes / 4);
+  uint64_t guest = kGuestScanBegin;
+  while (guest < kGuestScanEnd) {
+    const size_t want = size_t(std::min<uint64_t>(kSweepChunkBytes, kGuestScanEnd - guest));
+    const size_t got =
+        SafeReadBlock(memory->TranslateVirtual(uint32_t(guest)), chunk.data(), want);
+    if (!got) {
+      guest += want;  // nothing mapped here - stride past it
+      continue;
+    }
+    const size_t words = got / 4;
+    const bool writable = GuestRangeWritable(memory, uint32_t(guest));
+    for (size_t i = 1; i + 2 < words; ++i) {
+      if (!CameraSignatureAt(chunk.data(), i, words, match_a, match_b)) {
+        continue;
+      }
+      if (PokeCameraAspect(memory, uint32_t(guest + uint64_t(i) * 4), writable, to_bits,
+                           to_value)) {
+        ++patched;
+      }
+    }
+    guest += got;
+    // A short read means the chunk ran into an unmapped page; step over it so
+    // the next iteration starts past the gap instead of retrying the same one.
+    if (got < want) {
+      guest += 0x1000;
+    }
+  }
+#endif
+
   if (first_sweep) {
     first_sweep = false;
     REXLOG_ERROR("[AC6-WIDE] first sweep done");
@@ -444,7 +593,7 @@ uint32_t WidescreenSweep(rex::memory::Memory* memory, uint32_t match_a, uint32_t
   return patched;
 }
 
-DWORD WINAPI WidescreenThread(LPVOID) {
+void WidescreenThread() {
   const uint32_t native_bits = HostBitsOf(kNativeAspect);
   uint32_t poll_count = 0;
   bool last_in_mission = false;
@@ -458,7 +607,7 @@ DWORD WINAPI WidescreenThread(LPVOID) {
   // cheap and continues) so the front end is not scanned forever.
   uint32_t clean_reverts = 0;
   for (;;) {
-    Sleep(kModePollMs);
+    std::this_thread::sleep_for(std::chrono::milliseconds(kModePollMs));
     bool enabled = REXCVAR_GET(ac6_widescreen);
     rex::memory::Memory* memory = g_ws_memory.load(std::memory_order_acquire);
     // Mode poll, every cycle: cheap SEH-safe 3-dereference guest read. A null
@@ -573,7 +722,6 @@ DWORD WINAPI WidescreenThread(LPVOID) {
       }
     }
   }
-  return 0;
 }
 
 }  // namespace
@@ -602,7 +750,7 @@ void WidescreenInit(rex::memory::Memory* memory) {
                    REXCVAR_GET(ac6_widescreen_cinematics) ? 1 : 0,
                    REXCVAR_GET(present_letterbox) ? 1 : 0);
     }
-    CreateThread(nullptr, 0, WidescreenThread, nullptr, 0, nullptr);
+    std::thread(WidescreenThread).detach();
   });
 }
 
@@ -774,11 +922,11 @@ void WidescreenShrinkMarkerQuads(uint8_t* vertices, uint32_t vertex_stride, uint
       } else if (indices_32bit) {
         uint32_t raw;
         std::memcpy(&raw, indices + at * 4, sizeof(raw));
-        vi = _byteswap_ulong(raw);
+        vi = rex::byte_swap(raw);
       } else {
         uint16_t raw;
         std::memcpy(&raw, indices + at * 2, sizeof(raw));
-        vi = _byteswap_ushort(raw);
+        vi = rex::byte_swap(raw);
       }
       if (vi >= kMarkerMaxVertices) {
         b.valid = false;
@@ -789,8 +937,8 @@ void WidescreenShrinkMarkerQuads(uint8_t* vertices, uint32_t vertex_stride, uint
       uint32_t raw_x, raw_y;
       std::memcpy(&raw_x, vp, sizeof(raw_x));
       std::memcpy(&raw_y, vp + sizeof(float), sizeof(raw_y));
-      raw_x = _byteswap_ulong(raw_x);
-      raw_y = _byteswap_ulong(raw_y);
+      raw_x = rex::byte_swap(raw_x);
+      raw_y = rex::byte_swap(raw_y);
       std::memcpy(&x[c], &raw_x, sizeof(x[c]));
       std::memcpy(&y[c], &raw_y, sizeof(y[c]));
       if (!std::isfinite(x[c]) || !std::isfinite(y[c])) {
@@ -874,12 +1022,12 @@ void WidescreenShrinkMarkerQuads(uint8_t* vertices, uint32_t vertex_stride, uint
         uint8_t* vp = vertices + size_t(b.vi[c]) * vertex_stride + pos_offset;
         uint32_t raw;
         std::memcpy(&raw, vp, sizeof(raw));
-        raw = _byteswap_ulong(raw);
+        raw = rex::byte_swap(raw);
         float vx;
         std::memcpy(&vx, &raw, sizeof(vx));
         float nx = cx + (vx - cx) * shrink;
         std::memcpy(&raw, &nx, sizeof(raw));
-        raw = _byteswap_ulong(raw);
+        raw = rex::byte_swap(raw);
         std::memcpy(vp, &raw, sizeof(raw));
       }
     }

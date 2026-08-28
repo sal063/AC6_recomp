@@ -6,6 +6,10 @@
 #include <chrono>
 
 #include <native/audio/audio_trace.h>
+#include <rex/cvar.h>
+
+REXCVAR_DECLARE(bool, audio_trace_telemetry);
+REXCVAR_DECLARE(bool, audio_deep_trace);
 
 namespace rex::audio {
 
@@ -28,6 +32,13 @@ void AudioTraceBuffer::Record(const AudioTraceSubsystem subsystem,
                               const AudioTraceEventType event_type, const uint32_t client_id,
                               const uint32_t value_0, const uint32_t value_1,
                               const uint32_t value_2) {
+  // Reached from the host audio callback on every consumed frame. Taking a
+  // mutex and churning a deque there costs realtime headroom for data nobody
+  // reads unless tracing is on.
+  if (!REXCVAR_GET(audio_trace_telemetry) && !REXCVAR_GET(audio_deep_trace)) {
+    return;
+  }
+
   std::lock_guard<std::mutex> lock(mutex_);
   if (events_.size() >= kMaximumTraceEventCount) {
     events_.pop_front();

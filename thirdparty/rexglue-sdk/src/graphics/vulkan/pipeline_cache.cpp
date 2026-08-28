@@ -1246,6 +1246,17 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
     return false;
   }
 
+  // Dump shader files if desired. The shared translator already dumps the guest
+  // microcode; the translated binary is per-backend, and only the D3D12
+  // pipeline cache had this, so dump_shaders produced no SPIR-V at all.
+  if (!REXCVAR_GET(dump_shaders).empty()) {
+    bool edram_fsi_used =
+        render_target_cache_.GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
+    translation.Dump(REXCVAR_GET(dump_shaders), (shader.type() == xenos::ShaderType::kPixel)
+                                                    ? (edram_fsi_used ? "vulkan_fsi" : "vulkan_rtv")
+                                                    : "vulkan");
+  }
+
   // TODO(Triang3l): Log that the shader has been successfully translated in
   // common code.
 

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -29,7 +30,7 @@ REXCVAR_DEFINE_STRING(audio_backend, "sdl", "Audio", "Audio backend: sdl")
     .allowed({"sdl"})
 #endif
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-REXCVAR_DEFINE_INT32(audio_max_queue_depth, 8, "Audio",
+REXCVAR_DEFINE_INT32(audio_max_queue_depth, 16, "Audio",
                      "Maximum queued render-driver frames per client");
 REXCVAR_DEFINE_INT32(audio_callback_low_water_frames, 1, "Audio",
                      "Request a new guest callback when the runtime queue falls to this depth");
@@ -90,7 +91,21 @@ uint32_t StartupMaxCallbackLeadFrames() {
 uint32_t EffectiveCallbackTargetQueueDepth(const AudioClientState& client) {
   const uint32_t requested_target = CallbackTargetQueueDepth();
   const uint32_t driver_target = client.driver ? client.driver->queue_target_frames() : 1;
-  return std::clamp(std::max(requested_target, driver_target), 1u, QueueDepthLimit());
+  const uint32_t wanted = std::max(requested_target, driver_target);
+  const uint32_t limit = QueueDepthLimit();
+  if (wanted > limit) {
+    // Clamping below what the driver needs to cover one device period means a
+    // guaranteed underrun on every callback, so say so instead of silently
+    // capping it. Latched: this is evaluated on every worker iteration.
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true, std::memory_order_relaxed)) {
+      REXAPU_WARN(
+          "Audio queue target {} clamped to audio_max_queue_depth={}; the host device period "
+          "cannot be filled and will underrun. Raise audio_max_queue_depth.",
+          wanted, limit);
+    }
+  }
+  return std::clamp(wanted, 1u, limit);
 }
 
 uint32_t EffectiveCallbackLowWaterFrames(const AudioClientState& client) {
@@ -185,6 +200,25 @@ bool ShouldThrottleStartupCallback(const AudioClientState& client,
   // queued render-driver frame. Host-injected underrun silence should advance
   // tic timing, but it must not release callback pacing on its own.
   if (QueuedPlaybackObserved(client)) {
+    return false;
+  }
+
+  // Safety valve. The latch above is released only by the host draining a real
+  // queued frame; if that never happens the title stays pinned at one callback
+  // per iteration indefinitely. Give up after a bounded number of throttled
+  // passes so a starved host cannot wedge startup. This should never fire once
+  // the queue is sized to the device period - if it does, something else is
+  // keeping real frames from reaching the host.
+  constexpr uint32_t kMaxStartupThrottleIterations = 200;  // ~1s at the 5ms worker tick
+  if (client.telemetry.callback_throttle_count >= kMaxStartupThrottleIterations) {
+    // The counter stops advancing once the valve opens, so latch the warning
+    // rather than keying it off the count.
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true, std::memory_order_relaxed)) {
+      REXAPU_WARN("Audio startup pacing released by safety valve after {} throttled passes "
+                  "with no real frame drained; host audio may be starved",
+                  kMaxStartupThrottleIterations);
+    }
     return false;
   }
 
@@ -511,6 +545,11 @@ bool AudioRuntime::SubmitFrame(const size_t index, const uint32_t samples_ptr) {
   trace_buffer_.Record(AudioTraceSubsystem::kCore, AudioTraceEventType::kFrameSubmitted,
                        static_cast<uint32_t>(index), samples_ptr, client.telemetry.queued_depth,
                        static_cast<uint32_t>(frame.sequence_number));
+  // Called with mutex_ still held, which the host audio callback also takes.
+  // client.driver is a raw pointer deleted under this same lock, so dropping it
+  // here would race a concurrent shutdown. The driver no longer allocates on
+  // this path, so the hold is now a bounded frame copy rather than an
+  // unbounded trip through the allocator.
   client.driver->SubmitFrame(samples_ptr);
   return true;
 }

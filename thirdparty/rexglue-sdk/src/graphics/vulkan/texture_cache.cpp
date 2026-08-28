@@ -33,6 +33,10 @@
 #include <rex/ui/vulkan/ui_samplers.h>
 #include <rex/ui/vulkan/util.h>
 
+#include "../../../../../src/ac6_backend_fixes/ac6_widescreen.h"
+
+REXCVAR_DECLARE(bool, ac6_widescreen);
+
 REXCVAR_DEFINE_BOOL(non_seamless_cube_map, false, "GPU", "Use non-seamless cube map sampling");
 
 namespace rex::graphics::vulkan {
@@ -1033,6 +1037,34 @@ VkImageView VulkanTextureCache::RequestSwapTexture(uint32_t& width_scaled_out,
   // Only texture->key, not the result of BindingInfoFromFetchConstant, contains
   // whether the texture is scaled.
   key = texture->key();
+
+  // AC6 ultrawide: drives the mode-classified presentation - in-mission GPU
+  // frames fill the window, everything else (the whole front end, and
+  // CPU-written frames like FMV or loading images even in-mission) presents
+  // letterboxed at 16:9. The page query and its log only matter (and only
+  // cost) with the feature on; the notify itself early-outs when disabled.
+  {
+    bool gpu_composed = false;
+    if (REXCVAR_GET(ac6_widescreen)) {
+      texture_util::TextureGuestLayout swap_layout = key.GetGuestLayout();
+      uint32_t swap_extent = swap_layout.base.level_data_extent_bytes;
+      gpu_composed =
+          swap_extent && shared_memory().IsAnyPageGpuWritten(key.base_page << 12, swap_extent);
+      static uint32_t ac6_last_swap_state = UINT32_MAX;
+      static uint32_t ac6_swap_state_logs = 0;
+      uint32_t ac6_swap_state = (uint32_t(key.base_page) << 1) | (gpu_composed ? 1u : 0u);
+      if (ac6_swap_state != ac6_last_swap_state) {
+        ac6_last_swap_state = ac6_swap_state;
+        if (ac6_swap_state_logs < 32) {
+          ++ac6_swap_state_logs;
+          REXGPU_ERROR("[AC6-SWAP] frontbuffer base_page={:05X} gpu_written={} extent=0x{:X}",
+                       uint32_t(key.base_page), gpu_composed ? 1 : 0, swap_extent);
+        }
+      }
+    }
+    ac6::WidescreenNotifySwapSource(gpu_composed, true);
+  }
+
   if (width_unscaled_out) {
     *width_unscaled_out = key.GetWidth();
   }
@@ -1232,11 +1264,27 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
       host_format_is_signed ? host_format_pair.format_signed : host_format_pair.format_unsigned;
   LoadShaderIndex load_shader = host_format.load_shader;
   if (load_shader == kLoadShaderIndexUnknown) {
+    // Logged once: this aborts the texture load, and a silent abort is very
+    // hard to trace back from the visual result.
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      REXGPU_ERROR("No load shader for texture: base_page={:05X} fmt={} signed={} scaled={}",
+                   uint32_t(texture_key.base_page), uint32_t(texture_key.format),
+                   host_format_is_signed ? 1 : 0, uint32_t(texture_key.scaled_resolve));
+    }
     return false;
   }
   VkPipeline pipeline = texture_key.scaled_resolve ? load_pipelines_scaled_[load_shader]
                                                    : load_pipelines_[load_shader];
   if (pipeline == VK_NULL_HANDLE) {
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      REXGPU_ERROR("Null load pipeline for texture: base_page={:05X} fmt={} load_shader={} scaled={}",
+                   uint32_t(texture_key.base_page), uint32_t(texture_key.format),
+                   uint32_t(load_shader), uint32_t(texture_key.scaled_resolve));
+    }
     return false;
   }
   const LoadShaderInfo& load_shader_info = GetLoadShaderInfo(load_shader);

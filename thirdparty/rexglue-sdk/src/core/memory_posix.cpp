@@ -14,6 +14,9 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 
 #include <fcntl.h>
@@ -109,6 +112,143 @@ uint32_t ToPosixProtectFlags(PageAccess access) {
 bool IsWritableExecutableMemorySupported() {
   return true;
 }
+
+// Protection shadow.
+//
+// Windows answers QueryProtect with VirtualQuery, a cheap syscall. There is no
+// POSIX equivalent, so this file originally answered it by parsing
+// /proc/self/maps. That is ruinous here: the MMIO handler calls QueryProtect on
+// *every* access violation to check whether another thread already cleared the
+// watch, and guest write-watches fault constantly. Each call opened a file and
+// sscanf'd ~1000 lines while holding the global critical region, which measured
+// at 39% of total process CPU with the guest making no progress at all.
+//
+// mprotect goes through Protect() and mmap through AllocFixed(), so this
+// process is the only writer of its own protections and can simply remember
+// them. Ranges are page-aligned and coalesced; a lookup that misses falls back
+// to the maps file, which keeps addresses this module never handed out (host
+// allocations, the stack) answering exactly as before.
+namespace {
+
+struct ProtRange {
+  uintptr_t end = 0;
+  PageAccess access = PageAccess::kNoAccess;
+};
+
+std::shared_mutex g_prot_shadow_mutex;
+// Keyed by range start; ranges are non-overlapping and kept sorted.
+std::map<uintptr_t, ProtRange> g_prot_shadow;
+
+uintptr_t PageAlignDown(uintptr_t address) {
+  return address & ~static_cast<uintptr_t>(page_size() - 1);
+}
+
+uintptr_t PageAlignUp(uintptr_t address) {
+  const uintptr_t mask = static_cast<uintptr_t>(page_size() - 1);
+  return (address + mask) & ~mask;
+}
+
+// Callers must hold the lock exclusively. Coalescing is suppressed by the
+// unmap path, which needs [begin, end) to stay a range of its own so it can
+// then be erased without taking a neighbour with it.
+void ShadowInsertLocked(uintptr_t begin, uintptr_t end, PageAccess access,
+                        bool coalesce = true) {
+  if (begin >= end) {
+    return;
+  }
+
+  // Trim or split whatever already covers [begin, end).
+  auto it = g_prot_shadow.upper_bound(begin);
+  if (it != g_prot_shadow.begin()) {
+    --it;
+  }
+  while (it != g_prot_shadow.end() && it->first < end) {
+    const uintptr_t cur_begin = it->first;
+    const uintptr_t cur_end = it->second.end;
+    if (cur_end <= begin) {
+      ++it;
+      continue;
+    }
+    const PageAccess cur_access = it->second.access;
+    it = g_prot_shadow.erase(it);
+    if (cur_begin < begin) {
+      g_prot_shadow[cur_begin] = ProtRange{begin, cur_access};
+    }
+    if (cur_end > end) {
+      it = g_prot_shadow.insert(it, {end, ProtRange{cur_end, cur_access}});
+      ++it;
+    }
+  }
+
+  g_prot_shadow[begin] = ProtRange{end, access};
+
+  if (!coalesce) {
+    return;
+  }
+
+  // Coalesce with the neighbours so repeated re-arming of a watch cannot grow
+  // the map without bound.
+  auto inserted = g_prot_shadow.find(begin);
+  auto next = std::next(inserted);
+  if (next != g_prot_shadow.end() && next->first == inserted->second.end &&
+      next->second.access == access) {
+    inserted->second.end = next->second.end;
+    g_prot_shadow.erase(next);
+  }
+  if (inserted != g_prot_shadow.begin()) {
+    auto prev = std::prev(inserted);
+    if (prev->second.end == inserted->first && prev->second.access == access) {
+      prev->second.end = inserted->second.end;
+      g_prot_shadow.erase(inserted);
+    }
+  }
+}
+
+void ShadowRecord(void* base_address, size_t length, PageAccess access) {
+  if (!base_address || !length) {
+    return;
+  }
+  const uintptr_t begin = PageAlignDown(reinterpret_cast<uintptr_t>(base_address));
+  const uintptr_t end = PageAlignUp(reinterpret_cast<uintptr_t>(base_address) + length);
+  std::unique_lock<std::shared_mutex> lock(g_prot_shadow_mutex);
+  ShadowInsertLocked(begin, end, access);
+}
+
+void ShadowForget(void* base_address, size_t length) {
+  if (!base_address || !length) {
+    return;
+  }
+  const uintptr_t begin = PageAlignDown(reinterpret_cast<uintptr_t>(base_address));
+  const uintptr_t end = PageAlignUp(reinterpret_cast<uintptr_t>(base_address) + length);
+  std::unique_lock<std::shared_mutex> lock(g_prot_shadow_mutex);
+  // Insert uncoalesced first so any range straddling the boundaries is split,
+  // then drop everything inside. Coalescing here could merge the hole into a
+  // neighbour and leave the unmapped span still described.
+  ShadowInsertLocked(begin, end, PageAccess::kNoAccess, /*coalesce=*/false);
+  auto it = g_prot_shadow.lower_bound(begin);
+  while (it != g_prot_shadow.end() && it->first < end) {
+    it = g_prot_shadow.erase(it);
+  }
+}
+
+// Returns false if the address is not tracked, leaving the caller to fall back.
+bool ShadowLookup(void* address, PageAccess& access_out, uintptr_t& range_end_out) {
+  const uintptr_t addr = reinterpret_cast<uintptr_t>(address);
+  std::shared_lock<std::shared_mutex> lock(g_prot_shadow_mutex);
+  auto it = g_prot_shadow.upper_bound(addr);
+  if (it == g_prot_shadow.begin()) {
+    return false;
+  }
+  --it;
+  if (addr < it->first || addr >= it->second.end) {
+    return false;
+  }
+  access_out = it->second.access;
+  range_end_out = it->second.end;
+  return true;
+}
+
+}  // namespace
 
 // TODO(tomc): this needs to go somewhere else. we should utilize the platform namespace more.
 #if REX_PLATFORM_LINUX
@@ -236,6 +376,8 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
 
   void* result = mmap(base_address, length, prot_initial, flags, -1, 0);
   if (result != MAP_FAILED) {
+    ShadowRecord(result, length,
+                 allocation_type == AllocationType::kReserve ? PageAccess::kNoAccess : access);
     return result;
   }
 #if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX
@@ -247,6 +389,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
     // Verify the entire range is mapped before using mprotect
     if (IsRangeFullyMapped(base_address, length)) {
       if (mprotect(base_address, length, static_cast<int>(prot_requested)) == 0) {
+        ShadowRecord(base_address, length, access);
         return base_address;
       }
     }
@@ -266,10 +409,15 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
 #if defined(MADV_DONTNEED)
       (void)madvise(base_address, length, MADV_DONTNEED);
 #endif
+      ShadowRecord(base_address, length, PageAccess::kNoAccess);
       return true;
     }
     case DeallocationType::kRelease: {
-      return munmap(base_address, length) == 0;
+      if (munmap(base_address, length) != 0) {
+        return false;
+      }
+      ShadowForget(base_address, length);
+      return true;
     }
     default:
       // how we get here? :(
@@ -290,15 +438,25 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
   //             atomic in a mutli-threaded process either, but it's something to be aware of.
   // Query old access before changing, if the caller needs it
   if (out_old_access) {
-    LinuxMapEntry e;
-    if (FindEntryForAddress(base_address, e)) {
-      *out_old_access = PermsToPageAccess(e.perms);
+    PageAccess shadow_access;
+    uintptr_t shadow_end;
+    if (ShadowLookup(base_address, shadow_access, shadow_end)) {
+      *out_old_access = shadow_access;
+    } else {
+      LinuxMapEntry e;
+      if (FindEntryForAddress(base_address, e)) {
+        *out_old_access = PermsToPageAccess(e.perms);
+      }
     }
   }
 #endif
 
   uint32_t prot = ToPosixProtectFlags(access);
-  return mprotect(base_address, length, prot) == 0;
+  if (mprotect(base_address, length, prot) != 0) {
+    return false;
+  }
+  ShadowRecord(base_address, length, access);
+  return true;
 }
 
 bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
@@ -309,6 +467,18 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
 #else
   access_out = PageAccess::kNoAccess;
   length = 0;
+
+  // The hot path: this runs on every access violation, so it must not touch the
+  // filesystem. Only addresses this module never protected reach the fallback.
+  {
+    PageAccess shadow_access;
+    uintptr_t shadow_end;
+    if (ShadowLookup(base_address, shadow_access, shadow_end)) {
+      access_out = shadow_access;
+      length = static_cast<size_t>(shadow_end - reinterpret_cast<uintptr_t>(base_address));
+      return true;
+    }
+  }
 
   LinuxMapEntry e;
   if (!FindEntryForAddress(base_address, e)) {

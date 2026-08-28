@@ -30,6 +30,14 @@ bool DynamicLibrary::Load(const std::filesystem::path& path) {
   return handle_ != nullptr;
 }
 
+bool DynamicLibrary::LoadIfAlreadyLoaded(const std::filesystem::path& path) {
+  Close();
+  // RTLD_NOLOAD returns a handle only when the library is already mapped; it
+  // still takes a reference, so Close()'s dlclose stays balanced.
+  handle_ = dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+  return handle_ != nullptr;
+}
+
 void DynamicLibrary::Close() {
   if (handle_) {
     dlclose(handle_);

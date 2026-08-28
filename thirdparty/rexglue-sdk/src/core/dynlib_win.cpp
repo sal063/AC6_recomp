@@ -30,6 +30,13 @@ bool DynamicLibrary::Load(const std::filesystem::path& path) {
   return handle_ != nullptr;
 }
 
+bool DynamicLibrary::LoadIfAlreadyLoaded(const std::filesystem::path& path) {
+  // Unchanged Windows behaviour: these DLLs are not on the default search path
+  // unless the tool injected itself, so LoadLibraryW already only succeeds when
+  // it is genuinely present, and Close()'s FreeLibrary stays balanced.
+  return Load(path);
+}
+
 void DynamicLibrary::Close() {
   if (handle_) {
     FreeLibrary(static_cast<HMODULE>(handle_));

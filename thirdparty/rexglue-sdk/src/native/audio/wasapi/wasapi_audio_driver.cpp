@@ -46,12 +46,6 @@ uint32_t ClampRequestedFrames() {
   return static_cast<uint32_t>(std::clamp(REXCVAR_GET(audio_wasapi_buffer_frames), 64, 2048));
 }
 
-uint32_t RequiredQueueFramesForDevice(const uint32_t device_buffer_frames) {
-  const uint32_t buffer_frames = std::max(device_buffer_frames, 1u);
-  return std::max(3u, (buffer_frames + kRenderDriverTicSamplesPerFrame - 1) /
-                           kRenderDriverTicSamplesPerFrame);
-}
-
 REFERENCE_TIME FramesToHundredsOfNanoseconds(const uint32_t frame_count,
                                              const uint32_t sample_rate) {
   return static_cast<REFERENCE_TIME>((10000000ull * frame_count) / sample_rate);

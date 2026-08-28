@@ -514,6 +514,11 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
       if (used_result_components & 0b0010) {
         operand_neg[0] =
             builder_->createNoContractionUnaryOp(spv::OpFNegate, type_float_, operand[0]);
+      }
+      // Negated Z feeds both the sc of the X-major case (component 1) and the
+      // tc of the Y-major case (component 0), so it must be created if either
+      // is needed - not only for component 1.
+      if (used_result_components & 0b0011) {
         operand_neg[2] =
             builder_->createNoContractionUnaryOp(spv::OpFNegate, type_float_, operand[2]);
       }
@@ -573,6 +578,11 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
               // tc = y < 0.0 ? -z : z
               ma_y_result[0] = builder_->createTriOp(spv::OpSelect, type_float_, y_is_neg,
                                                      operand_neg[2], operand[2]);
+            }
+            // The face id is its own component - the other two major-axis cases
+            // compute it under its own guard, and nesting it under tc left it
+            // unset whenever the id was wanted without the coordinate.
+            if (used_result_components & 0b1000) {
               // id = y < 0.0 ? 3.0 : 2.0
               ma_y_result[3] = builder_->createTriOp(spv::OpSelect, type_float_, y_is_neg,
                                                      builder_->makeFloatConstant(3.0f),

@@ -69,9 +69,69 @@ bool SdlAudioDriver::Initialize() {
     return false;
   }
 
-  REXAPU_INFO("SdlAudioDriver initialized: client={} channels={} freq={}", client_index_,
-              kOutputChannels, kAudioFrameSampleRate);
+  // Size the queue from the period SDL actually opened, not an assumption. SDL
+  // defaults to 1024 frames at 48kHz, which is four 256-sample guest frames;
+  // the old hardcoded target of 3 could never fill one callback.
+  SDL_AudioSpec device_spec{};
+  int device_sample_frames = 0;
+  if (SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(stream_), &device_spec,
+                               &device_sample_frames) &&
+      device_sample_frames > 0) {
+    device_buffer_frames_.store(static_cast<uint32_t>(device_sample_frames),
+                                std::memory_order_release);
+  } else {
+    REXAPU_WARN("SdlAudioDriver could not query the device period for client {} ({}); "
+                "assuming {} frames",
+                client_index_, SDL_GetError(),
+                device_buffer_frames_.load(std::memory_order_acquire));
+  }
+
+  {
+    const size_t pool_frames = static_cast<size_t>(queue_target_frames()) * 2 + 4;
+    std::lock_guard<std::mutex> guard(frames_mutex_);
+    frame_pool_storage_.assign(pool_frames * kAudioFrameTotalSamples, 0.0f);
+    for (size_t i = 0; i < pool_frames; ++i) {
+      frames_unused_.push(frame_pool_storage_.data() + (i * kAudioFrameTotalSamples));
+    }
+  }
+
+  const char* driver_name = SDL_GetCurrentAudioDriver();
+  REXAPU_INFO("SdlAudioDriver initialized: client={} backend={} channels={} freq={} "
+              "device_period_frames={} queue_target={} queue_low_water={}",
+              client_index_, driver_name ? driver_name : "?", kOutputChannels,
+              kAudioFrameSampleRate, device_buffer_frames_.load(std::memory_order_acquire),
+              queue_target_frames(), queue_low_water_frames());
   return true;
+}
+
+uint32_t SdlAudioDriver::queue_target_frames() const {
+  return RequiredQueueFramesForDevice(device_buffer_frames_.load(std::memory_order_acquire),
+                                      kQueueHeadroomFrames);
+}
+
+uint32_t SdlAudioDriver::queue_low_water_frames() const {
+  return std::max(1u, queue_target_frames() - 1);
+}
+
+// Caller must hold frames_mutex_. Never allocates: on pool exhaustion the
+// oldest queued frame is recycled, dropping the stalest audio rather than
+// blocking the realtime callback behind the allocator.
+float* SdlAudioDriver::AcquireFrameBufferLocked() {
+  if (!frames_unused_.empty()) {
+    float* buffer = frames_unused_.top();
+    frames_unused_.pop();
+    return buffer;
+  }
+
+  if (!frames_queued_.empty()) {
+    float* buffer = frames_queued_.front();
+    frames_queued_.pop();
+    queued_depth_.fetch_sub(1, std::memory_order_relaxed);
+    dropped_frames_.fetch_add(1, std::memory_order_relaxed);
+    return buffer;
+  }
+
+  return nullptr;
 }
 
 void SdlAudioDriver::Shutdown() {
@@ -86,14 +146,16 @@ void SdlAudioDriver::Shutdown() {
   }
 
   std::lock_guard<std::mutex> guard(frames_mutex_);
+  // The frames point into frame_pool_storage_, so they are released with it.
   while (!frames_unused_.empty()) {
-    delete[] frames_unused_.top();
     frames_unused_.pop();
   }
   while (!frames_queued_.empty()) {
-    delete[] frames_queued_.front();
     frames_queued_.pop();
   }
+  frame_pool_storage_.clear();
+  frame_pool_storage_.shrink_to_fit();
+  queued_depth_.store(0, std::memory_order_relaxed);
   pending_output_float_count_ = 0;
   pending_output_float_offset_ = 0;
 
@@ -113,12 +175,10 @@ void SdlAudioDriver::SubmitFrame(const uint32_t frame_ptr) {
   float* output_frame = nullptr;
   {
     std::lock_guard<std::mutex> guard(frames_mutex_);
-    if (frames_unused_.empty()) {
-      output_frame = new float[kAudioFrameTotalSamples];
-    } else {
-      output_frame = frames_unused_.top();
-      frames_unused_.pop();
-    }
+    output_frame = AcquireFrameBufferLocked();
+  }
+  if (!output_frame) {
+    return;
   }
 
   std::memcpy(output_frame, input_frame, sizeof(float) * kAudioFrameTotalSamples);
@@ -153,12 +213,10 @@ void SdlAudioDriver::SubmitSilenceFrame() {
   float* output_frame = nullptr;
   {
     std::lock_guard<std::mutex> guard(frames_mutex_);
-    if (frames_unused_.empty()) {
-      output_frame = new float[kAudioFrameTotalSamples];
-    } else {
-      output_frame = frames_unused_.top();
-      frames_unused_.pop();
-    }
+    output_frame = AcquireFrameBufferLocked();
+  }
+  if (!output_frame) {
+    return;
   }
 
   std::fill_n(output_frame, kAudioFrameTotalSamples, 0.0f);
@@ -195,6 +253,7 @@ AudioDriverTelemetry SdlAudioDriver::GetTelemetry() const {
       silence_injections_.load(std::memory_order_relaxed),
       queued_depth_.load(std::memory_order_relaxed),
       peak_queued_depth_.load(std::memory_order_relaxed),
+      dropped_frames_.load(std::memory_order_relaxed),
   };
 }
 
@@ -240,17 +299,29 @@ void SdlAudioDriver::FillStream(SDL_AudioStream* stream, int bytes_needed) {
     }
 
     if (pending_output_float_count_ == 0) {
-      std::array<float, kRenderDriverTicSamplesPerFrame * kOutputChannels> silence{};
-      if (!SDL_PutAudioStreamData(stream, silence.data(), kOutputFrameBytes)) {
+      // Write only what was actually asked for, and report only what was
+      // actually written. The guest render-driver tic is derived entirely from
+      // ReportSamplesConsumedForClient, so over-reporting here runs the guest's
+      // audio clock ahead of real playback.
+      const std::array<float, kRenderDriverTicSamplesPerFrame * kOutputChannels> silence{};
+      const int silence_bytes = std::min(bytes_needed, kOutputFrameBytes);
+      if (silence_bytes <= 0) {
+        break;
+      }
+      if (!SDL_PutAudioStreamData(stream, silence.data(), silence_bytes)) {
         return;
       }
       ++underrun_count_;
       ++silence_injections_;
-      bytes_needed -= std::min(bytes_needed, kOutputFrameBytes);
-      
-      consumed_frames_.fetch_add(1, std::memory_order_relaxed);
+      bytes_needed -= silence_bytes;
+
+      const uint32_t silence_samples =
+          static_cast<uint32_t>(silence_bytes / (kOutputChannels * sizeof(float)));
+      if (silence_bytes == kOutputFrameBytes) {
+        consumed_frames_.fetch_add(1, std::memory_order_relaxed);
+      }
       if (runtime_) {
-        runtime_->ReportSamplesConsumedForClient(client_index_, kRenderDriverTicSamplesPerFrame);
+        runtime_->ReportSamplesConsumedForClient(client_index_, silence_samples);
         runtime_->WakeWorker();
       }
       continue;

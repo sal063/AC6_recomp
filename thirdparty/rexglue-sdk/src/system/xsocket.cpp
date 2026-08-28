@@ -11,6 +11,7 @@
 #include <rex/system/xsocket.h>
 // #include <rex/system/xnet.h>
 
+#include <rex/cvar.h>
 #include <rex/net/socket.h>
 
 // Standard socket types used by Xbox API emulation
@@ -24,6 +25,15 @@
 #include <netinet/ip.h>
 #include <sys/socket.h>
 #endif
+
+// XNet is not implemented (see SendTo/RecvFrom), so nothing can ever deliver to
+// a guest socket and a blocking recv on one waits forever - the title does not
+// get past its network init without this. Applies to every guest socket, not
+// just VDP: scoping it to VDP alone is not enough to boot. Non-zero bounds the
+// wait, at the cost of making a socket the guest expects to block return
+// EAGAIN instead, so it must go once XNet exists.
+REXCVAR_DEFINE_UINT32(guest_socket_recv_timeout_us, 2000, "Network",
+                      "Receive timeout in microseconds for guest sockets (0 = block indefinitely)");
 
 namespace rex::system {
 
@@ -50,6 +60,16 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
   if (native_handle_ == -1) {
     return X_STATUS_UNSUCCESSFUL;
   }
+
+#if !REX_PLATFORM_WIN32
+  const uint32_t recv_timeout_us = REXCVAR_GET(guest_socket_recv_timeout_us);
+  if (recv_timeout_us) {
+    struct timeval tv;
+    tv.tv_sec = recv_timeout_us / 1000000;
+    tv.tv_usec = recv_timeout_us % 1000000;
+    setsockopt(native_handle_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  }
+#endif
 
   return X_STATUS_SUCCESS;
 }

@@ -24,7 +24,12 @@
 #include <rex/memory.h>
 #include <rex/ui/graphics_util.h>
 
-REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu, false, "GPU",
+// Upstream defaults this to true (see the reference definition below). With it
+// off, unclipped draws get no vertex extent estimate, so height_used falls back
+// to the full render target height - a single depth-only unclipped draw then
+// claims all 2048 EDRAM tiles and takes ownership of every range, and anything
+// resolving from those tiles afterwards inherits depth data instead of colour.
+REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu, true, "GPU",
                     "Execute unclipped draw vertex shader on CPU");
 
 REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu_with_scissor, false, "GPU",

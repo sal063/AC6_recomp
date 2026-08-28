@@ -295,6 +295,15 @@ class ExceptionHandler {
 
   static void Install(Handler fn, void* data);
   static void Uninstall(Handler fn, void* data);
+
+  // Called when no installed Handler claims a fault, just before the process is
+  // allowed to die on it. Lets a higher layer that knows about guest state
+  // (which this one deliberately does not) print a report first. POSIX only -
+  // on Windows an unclaimed access violation already unwinds the SEH chain into
+  // the crash handler.
+  typedef void (*UnhandledReporter)(uint64_t fault_address, uint64_t host_pc, bool is_write);
+
+  static void SetUnhandledReporter(UnhandledReporter fn);
 };
 
 }  // namespace rex::arch

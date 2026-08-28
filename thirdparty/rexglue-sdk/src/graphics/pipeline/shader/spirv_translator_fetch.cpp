@@ -20,12 +20,68 @@
 
 #include <rex/assert.h>
 #include <rex/cvar.h>
+#include <rex/graphics/flags.h>
 #include <rex/graphics/pipeline/shader/spirv_translator.h>
+#include <rex/logging.h>
 #include <rex/math.h>
+
+#include <cstdlib>
+#include <cstring>
+#include <string>
 
 REXCVAR_DECLARE(bool, vfetch_index_rounding_bias);
 
 namespace rex::graphics {
+
+namespace {
+
+// "<hash>[:<slot>[+<slot>...]]" entries separated by comma/semicolon/whitespace.
+// A bare hash matches every tfetch slot in that shader; with a slot list, only
+// the listed Xenos tfetch slots match.
+//
+// NOTE: this mirrors UcodeHashSlotInList in dxbc_translator_fetch.cpp - the two
+// must stay in sync. Kept local rather than shared so the Windows/DXBC path is
+// untouched by the Vulkan port.
+bool Ac6UcodeHashSlotInList(uint64_t hash, uint32_t tfetch_index, const std::string& list) {
+  auto is_sep = [](char c) {
+    return c == ',' || c == ';' || c == ' ' || c == '\t' || c == '\n' || c == '\r';
+  };
+  size_t i = 0, n = list.size();
+  while (i < n) {
+    while (i < n && is_sep(list[i])) {
+      ++i;
+    }
+    size_t start = i;
+    while (i < n && !is_sep(list[i])) {
+      ++i;
+    }
+    if (i > start) {
+      std::string token = list.substr(start, i - start);
+      size_t colon = token.find(':');
+      std::string hash_part = colon == std::string::npos ? token : token.substr(0, colon);
+      if (std::strtoull(hash_part.c_str(), nullptr, 16) == hash) {
+        if (colon == std::string::npos) {
+          return true;  // No slot list - all slots.
+        }
+        size_t p = colon + 1;
+        while (p < token.size()) {
+          size_t q = token.find('+', p);
+          if (q == std::string::npos) {
+            q = token.size();
+          }
+          if (q > p && std::strtoul(token.substr(p, q - p).c_str(), nullptr, 10) == tfetch_index) {
+            return true;
+          }
+          p = q + 1;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 
 void SpirvShaderTranslator::ProcessVertexFetchInstruction(
     const ParsedVertexFetchInstruction& instr) {
@@ -751,6 +807,21 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
       }
     }
 
+    // For a resolution-scaled, position-derived 2D sample in a pixel shader that
+    // uses PsParamGen (AC6's deferred restore passes), the guest de-swizzle runs
+    // on integer guest pixels (see the param_gen floor in
+    // StartFragmentShaderInMain) and so samples the guest-texel centre, losing
+    // the host sub-pixel. Re-add it after the coordinate has been normalized so
+    // the sample lands on the exact host texel - true resolution-scaled detail.
+    // Port of dxbc_translator_fetch.cpp; without it the cvar is inert here.
+    const bool apply_host_subpixel_correction =
+        instr.opcode == ucode::FetchOpcode::kTextureFetch &&
+        !instr.attributes.unnormalized_coordinates &&
+        instr.dimension == xenos::FetchOpDimension::k2D && is_pixel_shader() &&
+        !is_depth_only_fragment_shader_ && GetPsParamGenInterpolator() != UINT32_MAX &&
+        (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1) &&
+        REXCVAR_GET(param_gen_host_subpixel_restore);
+
     // Fetch constant word usage:
     // - 2: Size (needed only once).
     // - 3: Exponent adjustment (needed only once).
@@ -766,6 +837,39 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
     // 3D: X - width, Y - height, Z - depth.
     uint32_t size_needed_components = 0b000;
     bool data_is_3d_needed = false;
+
+    // AC6 de-swizzle neutralisation (port of the DXBC path in
+    // dxbc_translator_fetch.cpp). Some guest post-process passes re-implement the
+    // EDRAM tiling swizzle on their source, which is only correct while the source
+    // stays tiled. The texture cache detiles everything to linear, so that
+    // arithmetic becomes a wrong texel permutation - here the resulting UVs leave
+    // [0, 1] and clamp to the black border, which is why the world reads as black
+    // on this backend while the D3D12 path (which has this fix) is fine.
+    //
+    // For an allowlisted shader, replace the coordinate with the identity
+    // host-texel UV so the pass copies its source 1:1.
+    bool apply_deswizzle_identity = false;
+    if (instr.opcode == ucode::FetchOpcode::kTextureFetch &&
+        !instr.attributes.unnormalized_coordinates &&
+        instr.dimension == xenos::FetchOpDimension::k2D && is_pixel_shader() &&
+        GetSpirvShaderModification().pixel.param_gen_enable &&
+        input_fragment_coordinates_ != spv::NoResult) {
+      const std::string& neutralize_hashes = REXCVAR_GET(ac6_neutralize_deswizzle_hashes);
+      apply_deswizzle_identity =
+          !neutralize_hashes.empty() &&
+          Ac6UcodeHashSlotInList(current_shader().ucode_data_hash(), fetch_constant_index,
+                                 neutralize_hashes);
+    }
+    if (apply_deswizzle_identity) {
+      // The identity UV divides by the guest size, so both components must be
+      // loaded even when the original coordinate maths would not have needed them.
+      size_needed_components |= 0b011;
+    }
+    if (apply_host_subpixel_correction) {
+      // Same: the guest width and height convert the host sub-pixel offset into
+      // normalized texture space.
+      size_needed_components |= 0b011;
+    }
     if (instr.opcode == ucode::FetchOpcode::kGetTextureWeights) {
       // Size needed for denormalization for coordinate lerp factor.
       // FIXME(Triang3l): Currently disregarding the LOD completely in
@@ -1100,6 +1204,69 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
           }
         }
       }
+      if (apply_host_subpixel_correction) {
+        // The coordinate now samples the guest-texel centre (host texel
+        // scale * swizzle(g) + scale / 2). Shift it to the current host
+        // sub-pixel so it samples host texel scale * swizzle(g) + s - the
+        // host-resolution swizzle - landing on an exact texel centre.
+        assert_true(input_fragment_coordinates_ != spv::NoResult);
+        assert_true(texture_resolution_scaled != spv::NoResult);
+        for (uint32_t i = 0; i < 2; ++i) {
+          const uint32_t axis_scale = i ? draw_resolution_scale_y_ : draw_resolution_scale_x_;
+          if (axis_scale <= 1) {
+            continue;
+          }
+          // host_subpixel = uint(gl_FragCoord[i]) % scale.
+          id_vector_temp_.clear();
+          id_vector_temp_.push_back(builder_->makeIntConstant(int(i)));
+          spv::Id position_component = builder_->createLoad(
+              builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                          id_vector_temp_),
+              spv::NoPrecision);
+          spv::Id host_subpixel = builder_->createUnaryOp(
+              spv::OpConvertUToF, type_float_,
+              builder_->createBinOp(
+                  spv::OpUMod, type_uint_,
+                  builder_->createUnaryOp(spv::OpConvertFToU, type_uint_, position_component),
+                  builder_->makeUintConstant(axis_scale)));
+          // delta = (host_subpixel - (scale - 1) / 2) / (guest_size * scale).
+          spv::Id delta = builder_->createNoContractionBinOp(
+              spv::OpFAdd, type_float_, host_subpixel,
+              builder_->makeFloatConstant(-(float(axis_scale) - 1.0f) * 0.5f));
+          assert_true(size[i] != spv::NoResult);
+          delta = builder_->createNoContractionBinOp(spv::OpFDiv, type_float_, delta, size[i]);
+          delta = builder_->createNoContractionBinOp(spv::OpFMul, type_float_, delta,
+                                                     const_texture_resolution_scale_reciprocal[i]);
+          // Only resolution-scaled textures are stored at host resolution.
+          coordinates[i] = builder_->createTriOp(
+              spv::OpSelect, type_float_, texture_resolution_scaled,
+              builder_->createNoContractionBinOp(spv::OpFAdd, type_float_, coordinates[i], delta),
+              coordinates[i]);
+        }
+      }
+      if (apply_deswizzle_identity) {
+        // coordinates[0..1] currently hold the guest's de-swizzled coordinate,
+        // computed for tiled data that the texture cache has already detiled.
+        // Overwrite it with the identity host-texel UV:
+        //   uv = gl_FragCoord.xy / (guest_size * draw_resolution_scale)
+        // Unconditional within an allowlisted shader - there is no swizzled
+        // source this could break. Mirrors dxbc_translator_fetch.cpp.
+        const float resolution_scale[2] = {float(draw_resolution_scale_x_),
+                                           float(draw_resolution_scale_y_)};
+        for (uint32_t i = 0; i < 2; ++i) {
+          assert_true(size[i] != spv::NoResult);
+          spv::Id host_size = size[i];
+          if (resolution_scale[i] != 1.0f) {
+            host_size = builder_->createNoContractionBinOp(
+                spv::OpFMul, type_float_, host_size,
+                builder_->makeFloatConstant(resolution_scale[i]));
+          }
+          spv::Id frag_coord_component = builder_->createCompositeExtract(
+              builder_->createLoad(input_fragment_coordinates_, spv::NoPrecision), type_float_, i);
+          coordinates[i] = builder_->createNoContractionBinOp(spv::OpFDiv, type_float_,
+                                                             frag_coord_component, host_size);
+        }
+      }
       if (instr.dimension == xenos::FetchOpDimension::k3DOrStacked) {
         spv::Id& z_coordinate_ref = coordinates[2];
         spv::Id z_offset =
@@ -1429,6 +1596,21 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
             spv::NoPrecision);
         spv::Id fetch_constant_word_4_signed =
             builder_->createUnaryOp(spv::OpBitcast, type_int_, fetch_constant_word_4);
+
+        // Load the fetch constant word 3 as well - it holds exp_adjust
+        // (dword_3 +13), needed for the result exponent bias below.
+        id_vector_temp_.clear();
+        id_vector_temp_.push_back(const_int_0_);
+        id_vector_temp_.push_back(
+            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) >> 2)));
+        id_vector_temp_.push_back(
+            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) & 3)));
+        spv::Id fetch_constant_word_3 = builder_->createLoad(
+            builder_->createAccessChain(spv::StorageClassUniform, uniform_fetch_constants_,
+                                        id_vector_temp_),
+            spv::NoPrecision);
+        spv::Id fetch_constant_word_3_signed =
+            builder_->createUnaryOp(spv::OpBitcast, type_int_, fetch_constant_word_3);
 
         // Accumulate the explicit LOD (or LOD bias) sources (in D3D11.3
         // specification order: specified LOD + sampler LOD bias + instruction
@@ -2036,10 +2218,15 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
         }
 
         // Apply the exponent bias from the bits 13:18 of the fetch constant
-        // word 4.
+        // word 3 (xe_gpu_texture_fetch_t::exp_adjust, dword_3 +13). This was
+        // previously read from word 4, whose bits 13:18 fall inside lod_bias
+        // (dword_4 +12, 10 bits), so a nonzero LOD bias was applied as an
+        // exponent bias and scaled every fetched texel by a power of two - for
+        // AC6 by 2^-8, crushing the composite to black. The DXBC translator
+        // reads word 3 here, which is why this only affected Vulkan.
         spv::Id result_exponent_bias = builder_->createBinBuiltinCall(
             type_float_, ext_inst_glsl_std_450_, GLSLstd450Ldexp, const_float_1_,
-            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_4_signed,
+            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_3_signed,
                                   builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
         {
           uint32_t result_remaining_components = used_result_nonzero_components;

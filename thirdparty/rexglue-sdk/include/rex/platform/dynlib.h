@@ -22,6 +22,10 @@ class DynamicLibrary {
   DynamicLibrary& operator=(DynamicLibrary&& other) noexcept;
 
   bool Load(const std::filesystem::path& path);
+  // Obtains a handle ONLY if the library is already present in the process,
+  // never loading it. For probing whether a tool has injected itself: a plain
+  // dlopen would load the library and make the probe true by asking.
+  bool LoadIfAlreadyLoaded(const std::filesystem::path& path);
   void Close();
   explicit operator bool() const { return handle_ != nullptr; }
 

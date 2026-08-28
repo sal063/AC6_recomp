@@ -16,6 +16,7 @@
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/input/flags.h>
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/logging.h>
@@ -39,6 +40,27 @@ void WarnOrphanEvent(const char* handler, SDL_JoystickID instance_id) {
     REXLOG_WARN("SDL {}: dropped event for unknown gamepad instance {} ({} dropped so far).",
                 handler, instance_id, n);
   }
+}
+
+// The mappings cvar is normally a bare filename. Resolving it against the CWD
+// alone only works when the game happens to be launched from its own directory,
+// so try next to the executable first - that is where the file ships - and fall
+// back to the CWD. Returns an empty string when neither candidate exists.
+std::string ResolveMappingsPath(const std::string& configured) {
+  const std::filesystem::path configured_path(configured);
+  if (configured_path.is_absolute()) {
+    return std::filesystem::exists(configured_path) ? configured : std::string();
+  }
+
+  std::error_code ec;
+  const auto next_to_exe = rex::filesystem::GetExecutableFolder() / configured_path;
+  if (std::filesystem::exists(next_to_exe, ec)) {
+    return rex::path_to_utf8(next_to_exe);
+  }
+  if (std::filesystem::exists(configured_path, ec)) {
+    return configured;
+  }
+  return std::string();
 }
 }  // namespace
 
@@ -99,30 +121,35 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
           },
           this);
 
-      // Initialize game controller subsystem
-      if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+      // Load custom controller mappings before the gamepad subsystem enumerates,
+      // so the initial device-added burst is already mapping-aware.
+      if (!REXCVAR_GET(hid_mappings_file).empty()) {
+        const auto mappings_path = ResolveMappingsPath(REXCVAR_GET(hid_mappings_file));
+        if (mappings_path.empty()) {
+          REXLOG_WARN("SDL GameControllerDB: file '{}' does not exist.",
+                      REXCVAR_GET(hid_mappings_file));
+        } else {
+          auto mappings_result = SDL_AddGamepadMappingsFromFile(mappings_path.c_str());
+          if (mappings_result < 0) {
+            REXLOG_ERROR("SDL GameControllerDB: error loading file '{}': {}.", mappings_path,
+                         SDL_GetError());
+          } else {
+            REXLOG_INFO("SDL GameControllerDB: loaded {} mappings from '{}'.", mappings_result,
+                        mappings_path);
+          }
+        }
+      }
+
+      // Initialize game controller subsystem. SDL_INIT_JOYSTICK is requested
+      // alongside it purely so unmapped sticks still raise a device-added event:
+      // without a mapping SDL never reports them as gamepads, and they would
+      // otherwise disappear with nothing logged.
+      if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_JOYSTICK)) {
         REXLOG_ERROR("SDL: Failed to init gamecontroller subsystem: {}", SDL_GetError());
         return;
       }
       SDL_Gamepad_initialized_ = true;
 
-      // Load custom controller mappings if available
-      if (!REXCVAR_GET(hid_mappings_file).empty()) {
-        std::filesystem::path mappings_path(REXCVAR_GET(hid_mappings_file));
-        if (!std::filesystem::exists(mappings_path)) {
-          REXLOG_WARN("SDL GameControllerDB: file '{}' does not exist.",
-                      REXCVAR_GET(hid_mappings_file));
-        } else {
-          auto mappings_result =
-              SDL_AddGamepadMappingsFromFile(REXCVAR_GET(hid_mappings_file).c_str());
-          if (mappings_result < 0) {
-            REXLOG_ERROR("SDL GameControllerDB: error loading file '{}': {}.",
-                         REXCVAR_GET(hid_mappings_file), mappings_result);
-          } else {
-            REXLOG_INFO("SDL GameControllerDB: loaded {} mappings.", mappings_result);
-          }
-        }
-      }
       REXLOG_INFO("SDL input driver initialized successfully");
     });
   }
@@ -438,6 +465,9 @@ void SDLInputDriver::ProcessEventLocked(const SDL_Event& event) {
     case SDL_EVENT_GAMEPAD_REMOVED:
       OnControllerDeviceRemovedLocked(event);
       break;
+    case SDL_EVENT_JOYSTICK_ADDED:
+      OnJoystickDeviceAddedLocked(event);
+      break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
       OnControllerDeviceAxisMotionLocked(event);
       break;
@@ -450,15 +480,37 @@ void SDLInputDriver::ProcessEventLocked(const SDL_Event& event) {
   }
 }
 
+void SDLInputDriver::OnJoystickDeviceAddedLocked(const SDL_Event& event) {
+  const auto instance_id = event.jdevice.which;
+  if (SDL_IsGamepad(instance_id)) {
+    // It has a mapping, so SDL_EVENT_GAMEPAD_ADDED covers it.
+    return;
+  }
+
+  // Without a mapping SDL never surfaces the device through the gamepad API,
+  // which is where every other code path here gets its controllers from. Name it
+  // loudly with the GUID a gamecontrollerdb entry has to be keyed on, otherwise
+  // the device is indistinguishable from one that was never plugged in.
+  char guid[33] = {};
+  SDL_GUIDToString(SDL_GetJoystickGUIDForID(instance_id), guid, sizeof(guid));
+  const char* name = SDL_GetJoystickNameForID(instance_id);
+
+  REXLOG_WARN(
+      "SDL: joystick \"{}\" (GUID {}, VendorID(0x{:04X}), ProductID(0x{:04X})) has no gamepad "
+      "mapping and will be ignored. Add a line for that GUID to '{}' to use it.",
+      name ? name : "<unnamed>", guid, SDL_GetJoystickVendorForID(instance_id),
+      SDL_GetJoystickProductForID(instance_id), REXCVAR_GET(hid_mappings_file));
+}
+
 void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
   // Open the controller.
-  const auto controller = SDL_OpenGamepad(event.cdevice.which);
+  const auto controller = SDL_OpenGamepad(event.gdevice.which);
   if (!controller) {
     // Transient open failures are real on hot-plug (e.g. a Bluetooth pad that
     // reconnects before the stack has settled). The device is simply not
     // added; it gets a fresh chance on its next SDL_EVENT_GAMEPAD_ADDED.
     REXLOG_WARN("SDL OnControllerDeviceAdded: SDL_OpenGamepad failed for device {}: {}",
-                event.cdevice.which, SDL_GetError());
+                event.gdevice.which, SDL_GetError());
     return;
   }
   REXLOG_INFO(
@@ -508,7 +560,7 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
 
 void SDLInputDriver::OnControllerDeviceRemovedLocked(const SDL_Event& event) {
   // Find the disconnected gamecontroller and close it.
-  auto idx = GetControllerIndexFromInstanceID(event.cdevice.which);
+  auto idx = GetControllerIndexFromInstanceID(event.gdevice.which);
   if (idx) {
     SDL_CloseGamepad(controllers_.at(*idx).sdl);
     controllers_.at(*idx) = {};

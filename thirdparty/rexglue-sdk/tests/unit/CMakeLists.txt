@@ -39,3 +39,29 @@ catch_discover_tests(unit_tests
         LABELS "unit"
         TIMEOUT 60
 )
+
+# Host wait-primitive semantics. Kept as its own binary because it needs only
+# rexcore, so it stays runnable even when the wider unit_tests link is broken.
+add_executable(sync_tests
+    core/sync_semantics_test.cpp
+)
+
+target_include_directories(sync_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+
+target_link_libraries(sync_tests PRIVATE
+    rexcore
+    Catch2::Catch2WithMain
+)
+
+set_target_properties(sync_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/bin
+)
+
+catch_discover_tests(sync_tests
+    TEST_PREFIX "sync."
+    PROPERTIES
+        LABELS "unit"
+        TIMEOUT 120
+)

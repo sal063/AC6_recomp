@@ -13,14 +13,19 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 
 #include <signal.h>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <ctime>
 #include <deque>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 #include <pthread.h>
 #include <semaphore.h>
@@ -32,6 +37,7 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 
 #include <rex/assert.h>
 #include <rex/chrono/chrono_steady_cast.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/thread/timer_queue.h>
 
@@ -56,6 +62,20 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #else
 #define REX_HAS_SIGEV_THREAD_ID 0
 #endif
+
+// The Win32 dispatcher hands an auto-reset release to one specific waiter, in
+// FIFO order; publishing a flag every waiter races for collapses two releases
+// into one and guarantees nobody in particular. Off restores that older
+// flag-based behaviour, so a suspected regression can be A/B'd without a
+// rebuild.
+REXCVAR_DEFINE_BOOL(posix_event_fifo_handoff, true, "Threading",
+                    "Hand auto-reset event releases to a specific waiter in FIFO order");
+
+// Milliseconds a single guest wait may run before the watchdog logs it as a
+// suspected deadlock, with the waiting thread, the object and the wait kind.
+// 0 disables the watchdog entirely.
+REXCVAR_DEFINE_UINT32(log_long_waits_ms, 0, "Threading",
+                      "Log guest waits that exceed this many milliseconds (0 = off)");
 
 namespace rex::thread {
 
@@ -234,8 +254,6 @@ class PosixConditionBase {
   virtual bool Signal() = 0;
 
   WaitResult Wait(std::chrono::milliseconds timeout) {
-    bool executed;
-    auto predicate = [this] { return this->signaled(); };
 #if REX_PLATFORM_LINUX
     auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
     int lock_result = pthread_mutex_lock(native_mutex);
@@ -248,22 +266,46 @@ class PosixConditionBase {
 #else
     std::unique_lock<std::mutex> lock(mutex_);
 #endif
-    if (predicate()) {
-      executed = true;
-    } else {
-      if (timeout == std::chrono::milliseconds::max()) {
-        cond_.wait(lock, predicate);
-        executed = true;  // Did not time out;
-      } else {
-        executed = cond_.wait_for(lock, timeout, predicate);
-      }
-    }
-    if (executed) {
+    // Already satisfiable, so consume it directly without joining the queue.
+    if (signaled()) {
       post_execution();
       return WaitResult::kSuccess;
-    } else {
-      return WaitResult::kTimeout;
     }
+
+    // Otherwise take a place in line. A signaller hands the release to the
+    // waiter at the front rather than raising a flag every waiter races for -
+    // see GrantOneLocked.
+    const bool fifo_handoff = REXCVAR_GET(posix_event_fifo_handoff);
+    WaitToken token;
+    if (fifo_handoff) {
+      wait_queue_.push_back(&token);
+    }
+    auto predicate = [this, &token] { return token.granted || this->signaled(); };
+
+    bool predicate_met;
+    if (timeout == std::chrono::milliseconds::max()) {
+      cond_.wait(lock, predicate);
+      predicate_met = true;
+    } else {
+      predicate_met = cond_.wait_for(lock, timeout, predicate);
+    }
+
+    // Leave the queue before deciding anything: once we are out, no signaller
+    // can hand us a release we would then drop on the floor.
+    if (fifo_handoff) {
+      RemoveFromQueueLocked(&token);
+    }
+
+    if (token.granted) {
+      // The signaller already accounted for this release on our behalf, so the
+      // object state must not be consumed a second time here.
+      return WaitResult::kSuccess;
+    }
+    if (predicate_met && signaled()) {
+      post_execution();
+      return WaitResult::kSuccess;
+    }
+    return WaitResult::kTimeout;
   }
 
   static std::pair<WaitResult, size_t> WaitMultiple(std::vector<PosixConditionBase*>&& handles,
@@ -374,6 +416,54 @@ class PosixConditionBase {
  protected:
   inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
+
+  // One entry per thread parked in Wait(), in arrival order.
+  //
+  // The Win32 dispatcher hands a release to a specific waiter, and does so in
+  // FIFO order. Publishing a flag and letting every waiter race for it is not
+  // equivalent in two ways that both strand guests: two releases delivered
+  // before any waiter runs collapse into one, and no waiter is guaranteed to
+  // ever win. Signallers therefore grant a token instead - see GrantOneLocked.
+  struct WaitToken {
+    bool granted = false;
+  };
+
+  // Hand the release to the longest-waiting thread. Returns false when nobody
+  // is queued, in which case the caller must fall back to recording the
+  // release in the object's own state so a later waiter can pick it up.
+  // Callers must hold mutex_.
+  bool GrantOneLocked() {
+    while (!wait_queue_.empty()) {
+      WaitToken* token = wait_queue_.front();
+      wait_queue_.pop_front();
+      if (!token->granted) {
+        token->granted = true;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Release everybody currently queued (manual-reset / broadcast semantics).
+  // Callers must hold mutex_.
+  void GrantAllLocked() {
+    for (WaitToken* token : wait_queue_) {
+      token->granted = true;
+    }
+    wait_queue_.clear();
+  }
+
+  // Callers must hold mutex_. Safe if the token was already dequeued by a grant.
+  void RemoveFromQueueLocked(WaitToken* token) {
+    for (auto it = wait_queue_.begin(); it != wait_queue_.end(); ++it) {
+      if (*it == token) {
+        wait_queue_.erase(it);
+        return;
+      }
+    }
+  }
+
+  std::deque<WaitToken*> wait_queue_;
   std::condition_variable cond_;
   std::mutex mutex_;
 };
@@ -394,7 +484,21 @@ class PosixCondition<Event> : public PosixConditionBase {
 
   bool Signal() override {
     auto lock = std::unique_lock<std::mutex>(mutex_);
-    signal_ = true;
+    if (!REXCVAR_GET(posix_event_fifo_handoff)) {
+      signal_ = true;
+    } else if (manual_reset_) {
+      // Stays signalled until Reset(), so everyone queued and everyone arriving
+      // later goes through.
+      signal_ = true;
+      GrantAllLocked();
+    } else if (!GrantOneLocked()) {
+      // Auto-reset with nobody waiting: retain the signal for the next waiter.
+      // When somebody *is* waiting we hand it to them and deliberately leave
+      // signal_ false - that is the "release one waiter and reset" the Win32
+      // dispatcher performs, and it is what keeps two Sets that arrive before
+      // either waiter runs from collapsing into a single release.
+      signal_ = true;
+    }
     cond_.notify_all();
     return true;
   }
@@ -1046,11 +1150,155 @@ PosixConditionHandle<Event>::PosixConditionHandle(bool manual_reset, bool initia
 template <>
 PosixConditionHandle<Thread>::PosixConditionHandle(pthread_t thread) : handle_(thread) {}
 
+namespace {
+
+// Deadlock diagnostics.
+//
+// A hung guest looks identical from the outside whatever the cause, so record
+// what every thread is blocked on while it is blocked. A watchdog then names
+// the stuck thread, the object and how long it has been there - which a stack
+// trace alone cannot give, since the backtrace shows the condition variable but
+// not which guest object it belongs to.
+//
+// The table is plain data with a fixed address so it can equally be read out of
+// a core or a live process under gdb:
+//     p rex::thread::(anonymous namespace)::g_wait_slots
+struct WaitSlot {
+  std::atomic<uint32_t> tid{0};
+  std::atomic<const void*> object{nullptr};
+  std::atomic<uint64_t> start_ms{0};
+  std::atomic<uint32_t> kind{0};  // 0 idle, 1 Wait, 2 SignalAndWait, 3 WaitMultiple
+  std::atomic<uint32_t> object_count{0};
+  std::atomic<bool> alertable{false};
+  std::atomic<bool> reported{false};
+  char name[32] = {};
+};
+
+constexpr size_t kMaxWaitSlots = 256;
+WaitSlot g_wait_slots[kMaxWaitSlots];
+std::atomic<size_t> g_wait_slot_count{0};
+
+const char* WaitKindName(uint32_t kind) {
+  switch (kind) {
+    case 1:
+      return "Wait";
+    case 2:
+      return "SignalAndWait";
+    case 3:
+      return "WaitMultiple";
+    default:
+      return "idle";
+  }
+}
+
+uint64_t MonotonicMs() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count());
+}
+
+WaitSlot* AcquireWaitSlot() {
+  thread_local WaitSlot* slot = nullptr;
+  if (slot) {
+    return slot;
+  }
+  size_t index = g_wait_slot_count.fetch_add(1, std::memory_order_relaxed);
+  if (index >= kMaxWaitSlots) {
+    return nullptr;
+  }
+  slot = &g_wait_slots[index];
+  slot->tid.store(current_thread_system_id(), std::memory_order_relaxed);
+  if (pthread_getname_np(pthread_self(), slot->name, sizeof(slot->name)) != 0) {
+    slot->name[0] = '\0';
+  }
+  return slot;
+}
+
+// The watchdog only ever reads the table, so it cannot itself be blocked by
+// whatever the guest is stuck on.
+void StartWaitWatchdogOnce(uint32_t threshold_ms) {
+  static std::once_flag once;
+  std::call_once(once, [threshold_ms] {
+    std::thread([threshold_ms] {
+      pthread_setname_np(pthread_self(), "WaitWatchdog");
+      while (true) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        uint64_t now = MonotonicMs();
+        size_t count = std::min(g_wait_slot_count.load(std::memory_order_relaxed), kMaxWaitSlots);
+        for (size_t i = 0; i < count; ++i) {
+          auto& slot = g_wait_slots[i];
+          uint32_t kind = slot.kind.load(std::memory_order_acquire);
+          if (!kind) {
+            continue;
+          }
+          uint64_t start = slot.start_ms.load(std::memory_order_relaxed);
+          if (!start || now - start < threshold_ms) {
+            continue;
+          }
+          if (slot.reported.exchange(true, std::memory_order_relaxed)) {
+            continue;
+          }
+          REXLOG_ERROR(
+              "[WAITWD] tid={} '{}' stuck in {} for {} ms on object={:#x} count={} alertable={}",
+              slot.tid.load(std::memory_order_relaxed), slot.name, WaitKindName(kind), now - start,
+              reinterpret_cast<uintptr_t>(slot.object.load(std::memory_order_relaxed)),
+              slot.object_count.load(std::memory_order_relaxed),
+              slot.alertable.load(std::memory_order_relaxed));
+        }
+      }
+    }).detach();
+  });
+}
+
+// Marks the calling thread as blocked for as long as it is in scope.
+class ScopedWaitRecord {
+ public:
+  ScopedWaitRecord(uint32_t kind, const void* object, uint32_t object_count, bool alertable) {
+    uint32_t threshold_ms = REXCVAR_GET(log_long_waits_ms);
+    if (!threshold_ms) {
+      return;
+    }
+    StartWaitWatchdogOnce(threshold_ms);
+    slot_ = AcquireWaitSlot();
+    if (!slot_) {
+      return;
+    }
+    slot_->object.store(object, std::memory_order_relaxed);
+    slot_->object_count.store(object_count, std::memory_order_relaxed);
+    slot_->alertable.store(alertable, std::memory_order_relaxed);
+    slot_->start_ms.store(MonotonicMs(), std::memory_order_relaxed);
+    slot_->reported.store(false, std::memory_order_relaxed);
+    // Published last: a non-zero kind is what makes the entry live.
+    slot_->kind.store(kind, std::memory_order_release);
+  }
+
+  ~ScopedWaitRecord() {
+    if (!slot_) {
+      return;
+    }
+    if (slot_->reported.load(std::memory_order_relaxed)) {
+      REXLOG_ERROR("[WAITWD] tid={} '{}' released after {} ms",
+                     slot_->tid.load(std::memory_order_relaxed), slot_->name,
+                     MonotonicMs() - slot_->start_ms.load(std::memory_order_relaxed));
+    }
+    slot_->kind.store(0, std::memory_order_release);
+  }
+
+  ScopedWaitRecord(const ScopedWaitRecord&) = delete;
+  ScopedWaitRecord& operator=(const ScopedWaitRecord&) = delete;
+
+ private:
+  WaitSlot* slot_ = nullptr;
+};
+
+}  // namespace
+
 WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
   auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);
   if (posix_wait_handle == nullptr) {
     return WaitResult::kFailed;
   }
+  ScopedWaitRecord wait_record(1, wait_handle, 1, is_alertable);
   if (!is_alertable) {
     return posix_wait_handle->condition().Wait(timeout);
   }
@@ -1084,6 +1332,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
     return WaitResult::kFailed;
   }
 
+  ScopedWaitRecord wait_record(2, wait_handle_to_wait_on, 1, is_alertable);
   if (!is_alertable) {
     return posix_wait_handle_to_wait_on->condition().Wait(timeout);
   }
@@ -1116,6 +1365,8 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
     }
     conditions.push_back(&handle->condition());
   }
+  ScopedWaitRecord wait_record(3, wait_handles[0], uint32_t(wait_handle_count), is_alertable);
+
   if (!is_alertable) {
     return PosixConditionBase::WaitMultiple(std::move(conditions), wait_all, timeout);
   }

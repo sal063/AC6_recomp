@@ -449,6 +449,9 @@ class VulkanCommandProcessor : public CommandProcessor {
   void InvalidateAllVertexBufferResidency();
   void InvalidateVertexBufferResidency(uint32_t vfetch_index);
   void InvalidateVertexBufferResidencyRange(uint32_t first_vfetch, uint32_t last_vfetch);
+  static std::pair<uint32_t, uint32_t> VertexBufferMemoryInvalidationCallbackThunk(
+      void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range);
+  bool AC6TerrainHdEnsureRing();
   struct ReadbackBuffer {
     VkBuffer buffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDeviceMemory memories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
@@ -762,6 +765,13 @@ class VulkanCommandProcessor : public CommandProcessor {
   // Bit is set when the vertex buffer at that index has been requested in the
   // current frame. Cleared between frames and on fetch constant writes.
   uint64_t vertex_buffers_in_sync_[2] = {};
+  // AC6 (ac6_fix_trails): set by the guest thread when it writes watched
+  // GPU-visible memory, consumed on the GPU thread at the next draw.
+  std::atomic<bool> vertex_buffer_memory_invalidated_{false};
+  void* vertex_buffer_memory_invalidation_callback_handle_ = nullptr;
+  // AC6 HD terrain (ac6_terrain_hd): synthetic vertex-fetch-95 ring table.
+  bool ac6_hd_active_ = false;
+  uint32_t ac6_hd_ring_phys_ = 0;  // UINT32_MAX = allocation failed
   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
   std::unordered_map<uint64_t, ReadbackBuffer> memexport_readback_buffers_;
 

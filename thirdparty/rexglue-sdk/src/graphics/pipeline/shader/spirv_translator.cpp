@@ -21,6 +21,8 @@
 #include <fmt/format.h>
 
 #include <rex/assert.h>
+#include <rex/cvar.h>
+#include <rex/graphics/flags.h>
 #include <rex/graphics/pipeline/shader/spirv.h>
 #include <rex/graphics/pipeline/shader/spirv_translator.h>
 #include <rex/math.h>
@@ -2564,6 +2566,41 @@ void SpirvShaderTranslator::CompleteVertexOrTessEvalShaderInMain() {
         position_w);
   }
 
+  // AC6 sun-flare "square" fix - drop the flare's second billboard.
+  // This VS (ADF9AFC4C10921B9) emits two billboards per flare draw: V0-V3 =
+  // the visible glow quad, V4-V7 = a huge malformed quad (corners far
+  // off-screen, garbage UVs) that is invisible on real hardware but
+  // mis-renders in the emulator as a faint bright-edged rectangle. Cull it the
+  // same way as kill-vertex above: NaN the position of vertices with index >=
+  // the threshold so the rasterizer discards the primitive; V0-V3 (the real
+  // glow) are untouched. Port of the same fix in the DXBC translator - without
+  // it the cvar reports enabled and does nothing on Vulkan.
+  if (REXCVAR_GET(ac6_flare_drop_quad2) &&
+      current_shader().ucode_data_hash() == UINT64_C(0xADF9AFC4C10921B9) &&
+      shader_modification.vertex.host_vertex_shader_type ==
+          Shader::HostVertexShaderType::kVertex &&
+      input_vertex_index_ != spv::NoResult) {
+    int32_t ac6_drop_index_min = REXCVAR_GET(ac6_flare_drop_index_min);
+    if (ac6_drop_index_min < 0) {
+      ac6_drop_index_min = 0;
+    }
+    // Here gl_VertexIndex is a signed int (the DXBC path compares the unsigned
+    // SV_VertexID); the threshold is clamped non-negative just above, so the
+    // signed comparison selects the same vertices.
+    spv::Id ac6_drop_vertex =
+        builder_->createBinOp(spv::OpSGreaterThanEqual, type_bool_,
+                              builder_->createLoad(input_vertex_index_, spv::NoPrecision),
+                              builder_->makeIntConstant(ac6_drop_index_min));
+    spv::Id ac6_drop_nan = builder_->createUnaryOp(
+        spv::OpBitcast, type_float_, builder_->makeUintConstant(UINT32_C(0x7FC00000)));
+    position_xyz = builder_->createTriOp(
+        spv::OpSelect, type_float3_,
+        builder_->smearScalar(spv::NoPrecision, ac6_drop_vertex, type_bool3_),
+        builder_->smearScalar(spv::NoPrecision, ac6_drop_nan, type_float3_), position_xyz);
+    position_w =
+        builder_->createTriOp(spv::OpSelect, type_float_, ac6_drop_vertex, ac6_drop_nan, position_w);
+  }
+
   // Write the point size.
   if (output_point_size_ != spv::NoResult) {
     spv::Id point_size;
@@ -3136,6 +3173,20 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
   // Pixel parameters.
   if (param_gen_interpolator != UINT32_MAX) {
     Modification modification = GetSpirvShaderModification();
+    // Snap the reverted position to the integer guest-pixel index. Reverting the
+    // resolution scale leaves a sub-guest-pixel fraction (.5 at 2x) that is only
+    // correct for shaders feeding PsParamGen straight to a tfetch. Shaders that
+    // instead do integer pixel-address maths on it - AC6's deferred EDRAM
+    // restore and de-swizzle passes - break, because their frac()-based bit
+    // extraction sees a multiplied period at >1x and scrambles the sample
+    // coordinate into a mosaic. Flooring makes that maths operate on integer
+    // guest pixels again, at the cost of those passes sampling at guest
+    // resolution; param_gen_host_subpixel_restore re-adds the sub-pixel later,
+    // at the texture fetch, so they regain full host resolution. Port of the
+    // same gate in dxbc_translator.cpp - without it both cvars are inert here.
+    const bool param_gen_floor_guest_position =
+        REXCVAR_GET(param_gen_integer_guest_position) ||
+        REXCVAR_GET(param_gen_host_subpixel_restore);
     // Rounding the position down, and taking the absolute value, so in case the
     // host GPU for some reason has quads used for derivative calculation at odd
     // locations, the left and top edges will have correct derivative magnitude
@@ -3166,6 +3217,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
       param_gen_x = builder_->createNoContractionBinOp(
           spv::OpFMul, type_float_, param_gen_x,
           builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_x_)));
+      if (param_gen_floor_guest_position) {
+        param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                       GLSLstd450Floor, param_gen_x);
+      }
     }
     param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
                                                    GLSLstd450FAbs, param_gen_x);
@@ -3202,6 +3257,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
       param_gen_y = builder_->createNoContractionBinOp(
           spv::OpFMul, type_float_, param_gen_y,
           builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_y_)));
+      if (param_gen_floor_guest_position) {
+        param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                       GLSLstd450Floor, param_gen_y);
+      }
     }
     param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
                                                    GLSLstd450FAbs, param_gen_y);

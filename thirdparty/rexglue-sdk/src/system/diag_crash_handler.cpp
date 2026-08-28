@@ -701,15 +701,160 @@ void NotifyOrderlyShutdown() {
 
 #else  // !REX_PLATFORM_WIN32
 
-// POSIX: not implemented yet. The seam is this file - a signal-based
-// implementation (SIGSEGV/SIGABRT + sigaltstack) drops in behind the same
-// header; the guest side (PPCContext + backchain) is already
-// platform-neutral.
+// POSIX: reports the guest side of a fault.
+//
+// ExceptionHandler owns SIGSEGV here (it drives the MMIO and write-watch
+// paths), so rather than installing a competing signal handler this registers
+// an unhandled-fault reporter with it. What it prints is the part a host stack
+// trace cannot give: which guest function faulted, and the guest call chain
+// that led there.
+//
+// Everything below runs on a thread that is about to die, so it takes no locks
+// and probes every guest read before performing it.
+
+#include <sys/uio.h>
+#include <unistd.h>
+
+#include <rex/exception_handler.h>
+#include <rex/memory.h>
+#include <rex/ppc/context.h>
+#include <rex/system/thread_state.h>
 
 namespace rex::diag::crash {
 
-void Install(const InstallOptions&) {}
-void SetGuestMemoryBounds(const void*, uint64_t) {}
+namespace {
+
+constexpr uint32_t kGuestVirtualBase = 0x100000000u;
+constexpr int kMaxGuestFrames = 32;
+
+std::atomic<uintptr_t> g_guest_base{0};
+std::atomic<uint64_t> g_guest_extent{0};
+
+// Reads one big-endian guest u32 without faulting.
+//
+// Checking the page protection first is not sufficient: guest memory is a shm
+// mapping, so a page can be readable and still have no backing behind it, and
+// touching one of those raises SIGBUS - for which no handler is installed, so
+// it kills the process. That turns this reporter into the thing that destroys
+// the crash it was invoked to describe.
+//
+// process_vm_readv performs the access in the kernel and reports EFAULT rather
+// than signalling, which is exactly the semantics a crash-time reader needs.
+bool SafeReadGuestU32(uint32_t guest_address, uint32_t* out) {
+  uintptr_t base = g_guest_base.load(std::memory_order_relaxed);
+  uint64_t extent = g_guest_extent.load(std::memory_order_relaxed);
+  if (!base || uint64_t(guest_address) + 4ull > extent) {
+    return false;
+  }
+  uint32_t value = 0;
+  iovec local{&value, sizeof(value)};
+  iovec remote{reinterpret_cast<void*>(base + guest_address), sizeof(value)};
+  if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != ssize_t(sizeof(value))) {
+    return false;
+  }
+  *out = __builtin_bswap32(value);
+  return true;
+}
+
+void ReportGuestState(uint64_t fault_address, uint64_t host_pc, bool is_write) {
+  auto* thread_state = rex::runtime::ThreadState::Get();
+  PPCContext* ctx = thread_state ? thread_state->context() : nullptr;
+  if (!ctx) {
+    REXLOG_ERROR("[FAULT] no guest context on this thread - the fault is in host code");
+    return;
+  }
+
+  if (fault_address >= kGuestVirtualBase) {
+    REXLOG_ERROR("[FAULT] guest {} of {:#010x}; host pc {:#x}", is_write ? "write" : "read",
+                 uint32_t(fault_address - kGuestVirtualBase), host_pc);
+  }
+
+  // The guest call chain. Each frame's saved lr is the return address into its
+  // caller, so these are the guest functions that led to the fault.
+  REXLOG_ERROR("[FAULT] guest call chain (lr {:08X}, sp {:08X}):", uint32_t(ctx->lr),
+               uint32_t(ctx->r1.u32));
+  uint32_t sp = ctx->r1.u32;
+  for (int frame = 0; frame < kMaxGuestFrames; ++frame) {
+    uint32_t caller_sp = 0;
+    if (!SafeReadGuestU32(sp, &caller_sp) || caller_sp <= sp) {
+      REXLOG_ERROR("[FAULT]   (chain ends at sp {:08X})", sp);
+      break;
+    }
+    uint32_t saved_lr = 0;
+    if (SafeReadGuestU32(caller_sp - 8, &saved_lr) && saved_lr) {
+      REXLOG_ERROR("[FAULT]   sp {:08X}  return {:08X}", caller_sp, saved_lr);
+    }
+    sp = caller_sp;
+  }
+
+  // Registers, so the faulting pointer can be traced back to what produced it.
+  const PPCRegister* gprs[32] = {
+      &ctx->r0,  &ctx->r1,  &ctx->r2,  &ctx->r3,  &ctx->r4,  &ctx->r5,  &ctx->r6,  &ctx->r7,
+      &ctx->r8,  &ctx->r9,  &ctx->r10, &ctx->r11, &ctx->r12, &ctx->r13, &ctx->r14, &ctx->r15,
+      &ctx->r16, &ctx->r17, &ctx->r18, &ctx->r19, &ctx->r20, &ctx->r21, &ctx->r22, &ctx->r23,
+      &ctx->r24, &ctx->r25, &ctx->r26, &ctx->r27, &ctx->r28, &ctx->r29, &ctx->r30, &ctx->r31};
+  for (int i = 0; i < 32; i += 4) {
+    REXLOG_ERROR("[FAULT]   r{:<2}={:08X}  r{:<2}={:08X}  r{:<2}={:08X}  r{:<2}={:08X}", i,
+                 uint32_t(gprs[i]->u32), i + 1, uint32_t(gprs[i + 1]->u32), i + 2,
+                 uint32_t(gprs[i + 2]->u32), i + 3, uint32_t(gprs[i + 3]->u32));
+  }
+
+  // Memory behind every register that looks like a live guest pointer. A fault
+  // like "walked a list shorter than its own count" is only explicable from the
+  // structures involved, and recovering those one address at a time over gdb
+  // costs a restart per question.
+  REXLOG_ERROR("[FAULT] memory behind pointer-like registers:");
+  uint32_t already_dumped[32] = {};
+  int dumped_count = 0;
+  for (int i = 0; i < 32; ++i) {
+    const uint32_t value = gprs[i]->u32;
+    // Guest heap/data lives well above the null guard; anything tiny is a
+    // count or a flag, not an address.
+    if (value < 0x10000u) {
+      continue;
+    }
+    uint32_t probe = 0;
+    if (!SafeReadGuestU32(value, &probe)) {
+      continue;
+    }
+    // Registers frequently alias (a struct and a field 4 bytes into it); one
+    // dump per 32-byte neighbourhood is enough.
+    bool seen = false;
+    for (int j = 0; j < dumped_count; ++j) {
+      if ((already_dumped[j] & ~31u) == (value & ~31u)) {
+        seen = true;
+        break;
+      }
+    }
+    if (seen) {
+      continue;
+    }
+    already_dumped[dumped_count++] = value;
+
+    uint32_t words[8] = {};
+    int read = 0;
+    for (; read < 8; ++read) {
+      if (!SafeReadGuestU32(value + uint32_t(read * 4), &words[read])) {
+        break;
+      }
+    }
+    REXLOG_ERROR("[FAULT]   r{:<2} -> [{:08X}] {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 i, value, words[0], words[1], words[2], words[3], words[4], words[5], words[6],
+                 words[7]);
+  }
+}
+
+}  // namespace
+
+void Install(const InstallOptions&) {
+  rex::arch::ExceptionHandler::SetUnhandledReporter(&ReportGuestState);
+}
+
+void SetGuestMemoryBounds(const void* host_base, uint64_t extent_bytes) {
+  g_guest_base.store(reinterpret_cast<uintptr_t>(host_base), std::memory_order_relaxed);
+  g_guest_extent.store(extent_bytes, std::memory_order_relaxed);
+}
+
 void SetGuestFunctionTable(const PPCFuncMapping*) {}
 void SetLogTailSink(rex::LogCaptureSink*) {}
 void SetContextProvider(ContextProvider) {}

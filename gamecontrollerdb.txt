@@ -1,0 +1,24 @@
+# SDL gamepad mappings shipped with ac6recomp.
+#
+# Only devices SDL does not already recognise belong here. SDL's Linux backend
+# auto-generates a mapping only for evdev nodes that advertise gamepad-class
+# buttons (BTN_GAMEPAD/BTN_SOUTH and friends). A stick that the kernel binds to
+# hid-generic instead of xpad reports joystick-class buttons (BTN_TRIGGER...),
+# fails that test, and is then invisible to the gamepad API entirely.
+#
+# Format reference: https://wiki.libsdl.org/SDL3/SDL_AddGamepadMapping
+# The path to this file is the `hid_mappings_file` cvar, under [Input].
+
+# Thrustmaster T.Flight Hotas One (USB 044f:b68d).
+# The PC/Xbox switch makes no difference on Linux -- same VID/PID, same version,
+# same hid-generic binding either way -- so this one line covers both positions.
+#
+# Layout notes, since several bindings are not the obvious ones:
+#   - Throttle (a2) is split into both triggers: forward drives RT, back drives LT.
+#   - Yaw twist (a5) is split into the shoulder buttons: left LB, right RB.
+#   - Trim L/R is an axis (a7), not a pair of buttons, so it drives dpup/dpdown.
+#   - Button 7 ("B/7") fires LT and RT together, hence the duplicate outputs.
+#   - The coolie hat is the right stick, which leaves dpleft/dpright unbound;
+#     that is deliberate, AC6 does not need them.
+#   - Raw inputs left unused: buttons 2, 8, 9, 12, 13, 14 and axes 3, 4, 6.
+030000004f0400008db6000011010000,Thrustmaster T.Flight Hotas One,platform:Linux,a:b0,b:b1,x:b4,y:b3,back:b5,start:b11,leftstick:b7,rightstick:b10,leftshoulder:-a5,rightshoulder:+a5,lefttrigger:+a2,righttrigger:-a2,lefttrigger:b6,righttrigger:b6,leftx:a0,lefty:a1,+rightx:h0.2,-rightx:h0.8,+righty:h0.4,-righty:h0.1,dpup:-a7,dpdown:+a7,

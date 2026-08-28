@@ -34,7 +34,7 @@ set(AC6RECOMP_SOURCES
     src/ac6_pac_index.cpp
     src/d3d_hooks.cpp
     src/render_hooks.cpp
-    src/ac6_texture_overrides.cpp
+    src/ac6_texture_swap_cvars.cpp
     src/ac6_native_graphics.cpp
     src/ac6_native_graphics_overlay.cpp
     src/ac6_backend_fixes/ac6_backend_capture_bridge.cpp
@@ -49,6 +49,12 @@ set(AC6RECOMP_SOURCES
     src/ac6_backend_fixes/ac6_widescreen.cpp
 )
 
+# Texture swapping is reachable only from the D3D12 texture cache, which is not
+# built on non-Windows hosts, so the translation unit would have no callers there.
+if(WIN32)
+    list(APPEND AC6RECOMP_SOURCES src/ac6_texture_overrides.cpp)
+endif()
+
 if(WIN32)
     add_executable(ac6recomp WIN32 ${AC6RECOMP_SOURCES})
 else()
@@ -57,8 +63,29 @@ endif()
 
 rexglue_setup_target(ac6recomp)
 
+# The SDK's xmemory.cpp reads cvars owned by graphics/flags.cpp while rexgraphics
+# already links rexsystem, so the two static archives are mutually dependent.
+# Declaring the back-edge makes CMake repeat them on the link line. On Windows the
+# symbol resolves by accident, because d3d12/command_processor.cpp references the
+# same cvar and pulls flags.cpp.o in ahead of rexsystem; a Vulkan-only build has no
+# such earlier reference and the rexglue tool fails to link. Applied here rather
+# than in the SDK to keep the vendored tree pristine.
+if(TARGET rexsystem AND TARGET rexgraphics)
+    target_link_libraries(rexsystem PUBLIC rexgraphics)
+endif()
+
 # Link libmspack for AC6 PAC LZX decompression in the runtime dump path.
 target_link_libraries(ac6recomp PRIVATE mspack)
+
+# The input driver looks for the gamepad mappings next to the executable, but the
+# binary stays in the build tree rather than an install directory, so put a copy
+# there on every build.
+add_custom_command(TARGET ac6recomp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/gamecontrollerdb.txt"
+        "$<TARGET_FILE_DIR:ac6recomp>"
+    COMMENT "Copying gamecontrollerdb.txt next to ac6recomp"
+)
 
 if(AC6RECOMP_IPO_SUPPORTED)
     set_property(TARGET ac6recomp PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)

@@ -20,7 +20,12 @@ std::unique_ptr<RenderDocAPI> RenderDocAPI::CreateIfConnected() {
 
   pRENDERDOC_GetAPI get_api = nullptr;
 
-  if (!renderdoc_api->library_.Load(platform::lib_names::kRenderDoc)) {
+  // Must not LOAD RenderDoc - only notice one that has injected itself. On
+  // Linux librenderdoc.so sits in a system library directory whenever
+  // RenderDoc is installed, so a plain dlopen here pulled it into every run,
+  // which is what put its overlay on the swapchain (and silently turned
+  // gpu_debug_markers on via IsGpuDebugMarkersEnabled).
+  if (!renderdoc_api->library_.LoadIfAlreadyLoaded(platform::lib_names::kRenderDoc)) {
     return nullptr;
   }
   get_api = renderdoc_api->library_.GetSymbol<pRENDERDOC_GetAPI>("RENDERDOC_GetAPI");

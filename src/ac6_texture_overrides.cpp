@@ -19,20 +19,14 @@
 
 REXCVAR_DECLARE(std::string, user_data_root);
 
-REXCVAR_DEFINE_BOOL(ac6_texture_swaps_enabled, false, "AC6/TextureSwaps",
-                    "Enable AC6 texture dump and replacement support (default off: the "
-                    "replacement lookup currently checks the filesystem on every texture "
-                    "upload, which can cause frame stutters; enable for texture modding)");
-REXCVAR_DEFINE_BOOL(ac6_texture_swaps_dump_enabled, false, "AC6/TextureSwaps",
-                    "Dump host-ready textures to the user-data texture dump folder");
-REXCVAR_DEFINE_BOOL(ac6_texture_swaps_replace_enabled, false, "AC6/TextureSwaps",
-                    "Load matching replacement DDS files from the user-data texture override folders");
-REXCVAR_DEFINE_STRING(ac6_texture_swaps_dump_dir, "texture_dumps", "AC6/TextureSwaps",
-                      "User-data subdirectory that stores dumped texture DDS files and metadata");
-REXCVAR_DEFINE_STRING(ac6_texture_swaps_override_dir, "override/textures", "AC6/TextureSwaps",
-                      "User-data subdirectory that stores loose replacement texture DDS files");
-REXCVAR_DEFINE_STRING(ac6_texture_swaps_mods_dir, "mods", "AC6/TextureSwaps",
-                      "User-data subdirectory containing mod folders with texture overrides");
+// Defined in ac6_texture_swap_cvars.cpp, which is built on every platform - this
+// translation unit is Windows-only (it needs the D3D12/DXGI format enums).
+REXCVAR_DECLARE(bool, ac6_texture_swaps_enabled);
+REXCVAR_DECLARE(bool, ac6_texture_swaps_dump_enabled);
+REXCVAR_DECLARE(bool, ac6_texture_swaps_replace_enabled);
+REXCVAR_DECLARE(std::string, ac6_texture_swaps_dump_dir);
+REXCVAR_DECLARE(std::string, ac6_texture_swaps_override_dir);
+REXCVAR_DECLARE(std::string, ac6_texture_swaps_mods_dir);
 
 namespace ac6::textures {
 namespace {

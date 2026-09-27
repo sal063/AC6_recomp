@@ -1881,9 +1881,16 @@ class Assembler {
     EmitAluOp(Opcode::kUMul, 0b11, dest_hi, dest_lo, src0, src1);
     ++stat_.uint_instruction_count;
   }
+  // Emitted as imad, not umad. The low 32 bits of a two's complement multiply-
+  // add are identical for signed and unsigned operands, so imad is bit-exact
+  // here (FXC itself compiles uint mad to imad and never emits umad). umad
+  // (opcode 0x52) is missing from Wine's vkd3d-shader, which rejects the whole
+  // shader ("Unrecognized opcode 0x52") - and since the vertex/index fetch
+  // endian swap uses this, every translated vertex shader failed to create,
+  // leaving a black screen when running the D3D12 build under Wine.
   void OpUMAd(const Dest& dest, const Src& mul0, const Src& mul1, const Src& add) {
-    EmitAluOp(Opcode::kUMAd, 0b111, dest, mul0, mul1, add);
-    ++stat_.uint_instruction_count;
+    EmitAluOp(Opcode::kIMAd, 0b111, dest, mul0, mul1, add);
+    ++stat_.int_instruction_count;
   }
   void OpUMax(const Dest& dest, const Src& src0, const Src& src1) {
     EmitAluOp(Opcode::kUMax, 0b11, dest, src0, src1);
